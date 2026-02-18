@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="th" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบติดตามสถานะการชำระเงิน - สำนักงานวิทยทรัพยากร จุฬาฯ</title>
+    
+    <!-- 1. โหลด Pico.css -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    
+    <!-- 2. โหลดฟอนต์ Sarabun -->
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700&display=swap" rel="stylesheet">
+    
+    <!-- 3. โหลดไฟล์ CSS ของเราเอง -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Header -->
+    <nav class="top-nav">
+        <div class="nav-container">
+            <div class="logo-box">OAR</div>
+            <hgroup style="margin: 0;">
+                <h5 style="margin: 0; color: #333;">สำนักงานวิทยทรัพยากร</h5>
+                <small style="color: #666;">จุฬาลงกรณ์มหาวิทยาลัย</small>
+            </hgroup>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        
+        <!-- Search Section -->
+        <section class="search-section">
+            <h4 style="margin-bottom: 1rem;">🔍 ค้นหาสถานะการจ่ายเงิน</h4>
+            <form onsubmit="event.preventDefault(); handleSearch();">
+                <label for="searchInput">ระบุเลขประจำตัวผู้เสียภาษี หรือ ชื่อบริษัท</label>
+                <div role="group">
+                    <input type="search" id="searchInput" placeholder="กรอกข้อมูลเพื่อค้นหา..." required>
+                    <button type="submit">ค้นหา</button>
+                </div>
+                <small style="color: #888;">* ข้อมูลจะแสดงเฉพาะรายการที่ได้รับอนุมัติแล้วเท่านั้น</small>
+            </form>
+        </section>
+
+        <!-- Loading Indicator -->
+        <div id="loading" style="display: none; text-align: center;">
+            <div class="spinner"></div>
+            <p>กำลังเชื่อมต่อฐานข้อมูล กรุณารอสักครู่...</p>
+        </div>
+
+        <!-- Result Area -->
+        <div id="result-area"></div>
+
+        <!-- Footer -->
+        <footer>
+            <p>© 2026 สำนักงานวิทยทรัพยากร จุฬาลงกรณ์มหาวิทยาลัย</p>
+            <p>ระบบติดตามสถานะพัสดุและการเงิน (Vendor Tracking System)</p>
+        </footer>
+
+    </div>
+
+    <!-- 4. โหลดไฟล์ JavaScript ของเรา -->
+    <script src="script.js"></script>
+</body>
+</html>

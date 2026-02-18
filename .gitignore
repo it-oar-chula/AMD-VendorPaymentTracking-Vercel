@@ -1,0 +1,23 @@
+Virtual Environment
+
+.venv/
+venv/
+ENV/
+
+Python Cache
+
+pycache/
+*.py[cod]
+
+Environment Variables (สำคัญมาก ห้ามลบ)
+
+.env
+
+MacOS junk
+
+.DS_Store
+
+IDE settings
+
+.vscode/
+.idea/
