@@ -1,7 +1,7 @@
-fastapi
 uvicorn
 pandas
 openpyxl
 msal
 requests
 python-dotenv
+fastapi
