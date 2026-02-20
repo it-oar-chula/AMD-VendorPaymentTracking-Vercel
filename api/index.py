@@ -114,6 +114,14 @@ def fetch_all_excel_data():
     combined_df = pd.concat(all_dataframes, ignore_index=True)
     combined_df.columns = combined_df.columns.astype(str).str.strip()
     
+    # ลบข้อมูลซ้ำ (กรณีมีข้อมูลเดียวกันอยู่หลายไฟล์)
+    before_count = len(combined_df)
+    combined_df = combined_df.drop_duplicates()
+    after_count = len(combined_df)
+    
+    if before_count > after_count:
+        logs.append(f"ℹ️ ลบข้อมูลซ้ำ: {before_count - after_count} รายการ (เหลือ {after_count} รายการ)")
+    
     return combined_df, logs
 
 # --- API Endpoints ---
@@ -159,9 +167,20 @@ async def search_vendor(q: str = Query(..., description="คำค้นหา (
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# Debug endpoint สำหรับ Local (ไม่มี /api prefix)
+@app.get("/debug/data")
+async def debug_all_data_local():
+    """ดึงข้อมูลและ Log แบบละเอียดยิบมาให้โปรแกรมเมอร์ดู (Local)"""
+    return await debug_all_data_impl()
+
+# Debug endpoint สำหรับ Vercel (มี /api prefix)
 @app.get("/api/debug/data")
 async def debug_all_data():
-    """ดึงข้อมูลและ Log แบบละเอียดยิบมาให้โปรแกรมเมอร์ดู"""
+    """ดึงข้อมูลและ Log แบบละเอียดยิบมาให้โปรแกรมเมอร์ดู (Vercel)"""
+    return await debug_all_data_impl()
+
+async def debug_all_data_impl():
+    """Implementation ของ debug endpoint"""
     try:
         df_main, logs = fetch_all_excel_data()
         
@@ -200,6 +219,11 @@ async def debug_all_data():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Health check endpoints (สำหรับ Local และ Vercel)
+@app.get("/health")
+async def health_check_local():
+    return {"status": "online", "message": "Backend is running"}
 
 @app.get("/api/health")
 async def health_check():
