@@ -84,7 +84,7 @@ def fetch_excel_data():
 
 # --- API Endpoints ---
 
-@app.get("/search")
+@app.get("/api/search")
 async def search_vendor(q: str = Query(..., description="คำค้นหา (ชื่อหรือเลขประจำตัวผู้เสียภาษี)")):
     try:
         # 1. ดึงข้อมูลล่าสุด
@@ -125,7 +125,7 @@ async def search_vendor(q: str = Query(..., description="คำค้นหา (
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/health")
+@app.get("/api/health")
 async def health_check():
     return {"status": "online", "message": "Backend is running smoothly"}
 

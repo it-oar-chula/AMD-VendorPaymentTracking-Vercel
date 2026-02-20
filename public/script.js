@@ -1,7 +1,9 @@
 // --- Configuration ---
-// ถ้าทดสอบในเครื่อง (Localhost) ให้ใช้ "http://localhost:8000"
-// ถ้าขึ้น Vercel หรือ Production ให้ใช้ "" (เรียก path เดียวกัน)
-const API_BASE_URL = "http://localhost:8000"; 
+// เช็คอัตโนมัติ: ถ้าหน้าเว็บรันบน localhost (เครื่องเรา) ให้ไปเรียก API ที่พอร์ต 8000
+// แต่ถ้าอยู่บน Vercel ให้วิ่งไปที่พาธ "/api" ของตัวเองได้เลย
+const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+    ? "http://localhost:8000/api" 
+    : "/api";
 
 async function handleSearch() {
     const input = document.getElementById('searchInput').value.trim();
@@ -16,6 +18,7 @@ async function handleSearch() {
 
     try {
         // 2. เรียก API ไปยัง Backend (FastAPI)
+        // URL จะออกมาเป็น /api/search?q=... ซึ่งตรงกับ Backend พอดี!
         const response = await fetch(`${API_BASE_URL}/search?q=${encodeURIComponent(input)}`);
         
         if (!response.ok) {
@@ -51,7 +54,6 @@ async function handleSearch() {
             }
 
             // สร้าง HTML ของการ์ด
-            // หมายเหตุ: ชื่อ key (item['...']) ต้องตรงกับ Header ใน Excel ของคุณ Art เป๊ะๆ
             return `
             <div class="result-card" style="border-left-color: ${statusClass === 'status-success' ? '#28a745' : '#ffc107'};">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">

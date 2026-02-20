@@ -236,9 +236,10 @@ python -m http.server 3001
 ### **ขั้นตอนที่ 1: สร้าง GitHub Repository**
 
 1. ไปที่ https://github.com/new
-2. ตั้งชื่อ Repository: `vendor-payment-tracking`
+2. ตั้งชื่อ Repository: `AMD-VendorPaymentTracking-Vercel`
 3. เลือก **Public** (free plan)
 4. คลิก **Create repository**
+(https://github.com/it-oar-chula/AMD-VendorPaymentTracking-Vercel.git)
 
 ---
 
@@ -251,7 +252,7 @@ python -m http.server 3001
 git init
 git add .
 git commit -m "Initial commit: Vendor Payment Tracking"
-git remote add origin https://github.com/YOUR_USERNAME/vendor-payment-tracking.git
+git remote add origin https://github.com/it-oar-chula/AMD-VendorPaymentTracking-Vercel.git
 git branch -M main
 git push -u origin main
 ```
@@ -293,7 +294,7 @@ FILE_NAME = Payment_Detail_Report.xlsx
 
 1. คลิก **Deploy**
 2. รอ 2-3 นาที
-3. จะได้ URL แบบนี้: `https://vendor-payment-tracking-xxxxx.vercel.app`
+3. จะได้ URL แบบนี้: `https://vendor-payment-tracking.vercel.app`
 
 ---
 
@@ -318,10 +319,10 @@ git push origin main
 ---
 
 ### **📍 ที่อยู่ของ Frontend และ Backend:**
-
+### **📍 หมายเหตุ Link มันได้แค่หลังบ้าน ไม่ได้ Frontend!!! ไม่รู้เพราะอะไร???**
 | ส่วน | URL |
 |------|-----|
-| Frontend | `https://vendor-payment-tracking.vercel.app` |
+| Frontend | `https://vendor-payment-tracking.vercel.app` | 
 | Backend API | `https://vendor-payment-tracking.vercel.app/api` |
 
 ---
@@ -352,7 +353,7 @@ git push origin main
 ## 👤 ติดต่อผู้ดูแล
 
 สำหรับปัญหาเกี่ยวกับการตั้งค่า Azure, SharePoint หรือ Credentials ติดต่อ:
-- สำนักงานวิทยทรัพยากร จุฬาลงกรณ์มหาวิทยาลัย
+- สุรพันธุ์ พลรัมย์ สำนักงานวิทยทรัพยากร จุฬาลงกรณ์มหาวิทยาลัย
 
 ---
 
