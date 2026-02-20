@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/debug/(.*)", "destination": "/public/index.html" },
+    { "source": "/debug/data(.*)", "destination": "/public/index.html" },
     { "source": "/", "destination": "/public/index.html" },
     { "source": "/(.*)", "destination": "/public/$1" }
   ]
