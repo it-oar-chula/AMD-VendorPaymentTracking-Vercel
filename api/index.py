@@ -120,7 +120,7 @@ def fetch_all_excel_data():
 
 @app.get("/")
 async def root():
-    return {"status": "online", "service": "Vendor Payment Tracking API"}
+    return {"status": "online", "service": "Vendor Payment Tracking API", "message": "โปรดไปที่ /index.html เพื่อเข้าสู่หน้าค้นหาข้อมูลสถานะการจ่ายเงิน"}
 
 @app.get("/api/search")
 async def search_vendor(q: str = Query(..., description="คำค้นหา (เลขรหัส Invoice เท่านั้น)")):
