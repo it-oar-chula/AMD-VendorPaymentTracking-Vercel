@@ -1,7 +1,7 @@
 // --- Configuration ---
 // เช็คอัตโนมัติ: ถ้ารันบน localhost ให้ชี้ไปที่ port 8000, ถ้า deploy แล้วใช้ /api
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
-    ? "http://localhost:8000" 
+    ? "http://localhost:8000/api" 
     : "/api";
 
 async function handleSearch() {

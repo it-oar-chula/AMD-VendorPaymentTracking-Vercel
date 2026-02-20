@@ -120,9 +120,9 @@ def fetch_all_excel_data():
 
 @app.get("/")
 async def root():
-    return {"message": "✅ API is running! โปรดเรียกใช้งานผ่าน Frontend หรือไปที่ /debug/data เพื่อดูข้อมูลดิบ"}
+    return {"status": "online", "service": "Vendor Payment Tracking API"}
 
-@app.get("/search")
+@app.get("/api/search")
 async def search_vendor(q: str = Query(..., description="คำค้นหา (เลขรหัส Invoice เท่านั้น)")):
     try:
         df_main, logs = fetch_all_excel_data()
@@ -159,7 +159,7 @@ async def search_vendor(q: str = Query(..., description="คำค้นหา (
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/debug/data")
+@app.get("/api/debug/data")
 async def debug_all_data():
     """ดึงข้อมูลและ Log แบบละเอียดยิบมาให้โปรแกรมเมอร์ดู"""
     try:
@@ -201,7 +201,7 @@ async def debug_all_data():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/health")
+@app.get("/api/health")
 async def health_check():
     return {"status": "online", "message": "Backend is running"}
 
