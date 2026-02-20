@@ -1,8 +1,7 @@
 // --- Configuration ---
-// เช็คอัตโนมัติ: ถ้าหน้าเว็บรันบน localhost (เครื่องเรา) ให้ไปเรียก API ที่พอร์ต 8000
-// แต่ถ้าอยู่บน Vercel ให้วิ่งไปที่พาธ "/api" ของตัวเองได้เลย
+// เช็คอัตโนมัติ: ถ้ารันบน localhost ให้ชี้ไปที่ port 8000, ถ้า deploy แล้วใช้ /api
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
-    ? "http://localhost:8000/api" 
+    ? "http://localhost:8000" 
     : "/api";
 
 async function handleSearch() {
@@ -17,8 +16,7 @@ async function handleSearch() {
     loading.style.display = 'block';
 
     try {
-        // 2. เรียก API ไปยัง Backend (FastAPI)
-        // URL จะออกมาเป็น /api/search?q=... ซึ่งตรงกับ Backend พอดี!
+        // 2. เรียก API ไปยัง Backend (FastAPI) โดยระบุ /search (ต่อจาก API_BASE_URL)
         const response = await fetch(`${API_BASE_URL}/search?q=${encodeURIComponent(input)}`);
         
         if (!response.ok) {
@@ -26,8 +24,6 @@ async function handleSearch() {
         }
 
         const data = await response.json();
-        
-        // ซ่อน Loading
         loading.style.display = 'none';
 
         // 3. กรณีไม่พบข้อมูล
@@ -35,7 +31,8 @@ async function handleSearch() {
             resultArea.innerHTML = `
                 <article class="result-card" style="border-left-color: #dc3545; text-align: center;">
                     <h5 style="color: #dc3545; margin-bottom: 0.5rem;">❌ ไม่พบข้อมูล</h5>
-                    <p style="margin-bottom: 0;">ไม่พบรายการที่ตรงกับ "${input}" โปรดตรวจสอบความถูกต้องอีกครั้ง</p>
+                    <p style="margin-bottom: 0.5rem;">ไม่พบรายการ "<strong>${input}</strong>" หรือรายการยังไม่ได้รับอนุมัติ</p>
+                    <small style="color: #888;">โปรดตรวจสอบเลข Invoice อีกครั้ง (ต้องพิมพ์ตรงกับที่ระบุในเอกสารทุกตัวอักษร)</small>
                 </article>`;
             return;
         }
@@ -43,22 +40,22 @@ async function handleSearch() {
         // 4. กรณีพบข้อมูล: วนลูปสร้างการ์ด (Card)
         resultArea.innerHTML = `<h6 style="margin-bottom: 1rem; color: #666;">พบทั้งหมด ${data.count} รายการ</h6>` + 
         data.results.map(item => {
-            // กำหนดสีสถานะ (Logic ง่ายๆ)
+            // กำหนดสีสถานะ (ใช้คอลัมน์ "สถานะรายการ" ตามไฟล์ CSV)
             let statusClass = 'status-default';
-            let statusText = item['สถานะ'] || 'รอดำเนินการ'; // ใช้ชื่อคอลัมน์จาก Excel
+            let statusText = item['สถานะรายการ'] || 'รอดำเนินการ'; 
             
-            if (statusText.includes('จ่าย') || statusText.includes('สำเร็จ') || statusText.includes('โอน')) {
+            if (statusText.includes('สำเร็จ') || statusText.includes('จ่าย') || statusText.includes('โอน')) {
                 statusClass = 'status-success';
             } else if (statusText.includes('รอ') || statusText.includes('ค้าง')) {
                 statusClass = 'status-pending';
             }
 
-            // สร้าง HTML ของการ์ด
+            // จัดหน้าตา Card ใหม่ให้ดึงเฉพาะ 7 คอลัมน์ที่คุณสนใจมาแสดง
             return `
             <div class="result-card" style="border-left-color: ${statusClass === 'status-success' ? '#28a745' : '#ffc107'};">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
                     <div>
-                        <small style="color: #888;">เลขที่รายการ: ${item['เลขที่อ้างอิงรายการ'] || '-'}</small>
+                        <small style="color: #888;">Invoice: ${item['Invoice_Number'] || '-'}</small>
                         <h5 style="margin: 0; font-weight: bold; color: #333;">${item['ชื่อผู้รับเงิน'] || 'ไม่ระบุชื่อ'}</h5>
                     </div>
                     <span class="status-pill ${statusClass}">
@@ -71,11 +68,18 @@ async function handleSearch() {
                 <div class="grid">
                     <div>
                         <small style="color: #666;">รายละเอียด</small><br>
-                        <strong>${item['บริการ'] || '-'}</strong><br>
-                        <small>วันที่: ${item['วันที่รายการมีผล'] || '-'}</small>
+                        <em style="color: #555;">${item['รายละเอียดของรายการ'] || '-'}</em><br><br>
+                        
+                        <small style="color: #666;">ข้อมูลการโอนเงิน</small><br>
+                        <small>ธนาคาร: <strong>${item['ธนาคาร'] || '-'}</strong> สาขา: ${item['สาขาธนาคารผู้รับเงิน'] || '-'}</small><br>
+                        <small>เลขบัญชี: <strong>${item['บัญชีผู้รับเงิน'] || '-'}</strong></small><br><br>
+                        
+                        <div style="padding: 8px 12px; background: #e8f5e9; border-radius: 6px; border-left: 4px solid #4caf50; display: inline-block;">
+                            <small style="color: #2e7d32; font-weight: bold;">📅 วันที่รายการมีผล: <span style="font-size: 1.1em;">${item['วันที่รายการมีผล'] || '-'}</span></small>
+                        </div>
                     </div>
                     <div style="text-align: right;">
-                        <small style="color: #666;">จำนวนเงินสุทธิ</small><br>
+                        <small style="color: #666;">จำนวนเงิน</small><br>
                         <span class="amount-text">฿${Number(item['จำนวนเงิน'] || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
                     </div>
                 </div>

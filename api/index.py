@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 import pandas as pd
 import msal
 import requests
@@ -8,32 +7,39 @@ from fastapi.middleware.cors import CORSMiddleware
 from urllib.parse import quote
 from dotenv import load_dotenv
 
-# 1. โหลดค่าจากไฟล์ .env
+# โหลดค่าจากไฟล์ .env
 load_dotenv()
 
 app = FastAPI(title="Vendor Tracking API")
 
-# 2. ตั้งค่า CORS เพื่อให้ Frontend (index.html) เรียกใช้งานได้
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ในใช้งานจริงควรระบุ URL ของเว็บเราเพื่อความปลอดภัย
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Configuration จาก Environment Variables ---
+# --- Configuration ---
 TENANT_ID = os.getenv("TENANT_ID")
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 SHAREPOINT_SITE_NAME = os.getenv("SHAREPOINT_SITE_NAME")
 SHAREPOINT_HOST = os.getenv("SHAREPOINT_HOST", "carchula.sharepoint.com")
 SHAREPOINT_FOLDER = os.getenv("SHAREPOINT_FOLDER", "Test Vendor")
-FILE_NAME = os.getenv("FILE_NAME", "Payment_Detail_Report.xlsx")
 
-# --- Helper Functions ---
+# กำหนดคอลัมน์ที่สนใจ 7 คอลัมน์ + เพิ่มสถานะรายการ เพื่อให้เว็บแสดงผลป้ายสีได้
+TARGET_COLUMNS = [
+    "วันที่รายการมีผล", 
+    "บัญชีผู้รับเงิน", 
+    "ชื่อผู้รับเงิน", 
+    "ธนาคาร", 
+    "สาขาธนาคารผู้รับเงิน", 
+    "จำนวนเงิน", 
+    "รายละเอียดของรายการ",
+    "สถานะรายการ" 
+]
 
 def get_access_token():
-    """ขอ Access Token จาก Microsoft Graph API"""
     authority = f"https://login.microsoftonline.com/{TENANT_ID}"
     client_app = msal.ConfidentialClientApplication(
         CLIENT_ID, authority=authority, client_credential=CLIENT_SECRET
@@ -41,95 +47,164 @@ def get_access_token():
     result = client_app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
     return result.get("access_token")
 
-def fetch_excel_data():
-    """ดึงข้อมูลจาก SharePoint และส่งคืนเป็น DataFrame"""
+def fetch_all_excel_data():
+    """ดึงข้อมูลจากทุกไฟล์ คืนค่ากลับมาเป็น (DataFrame, รายการLog)"""
+    logs = []
     token = get_access_token()
     if not token:
-        raise Exception("ไม่สามารถขอ Access Token ได้")
+        return pd.DataFrame(), ["❌ ไม่สามารถขอ Access Token จาก Azure ได้"]
     
     headers = {'Authorization': f'Bearer {token}'}
     
-    # หา Site ID
     site_url = f"https://graph.microsoft.com/v1.0/sites/{SHAREPOINT_HOST}:/sites/{SHAREPOINT_SITE_NAME}"
     site_res = requests.get(site_url, headers=headers).json()
     site_id = site_res.get('id')
-    
     if not site_id:
-        raise Exception("หา Site ID ไม่เจอ")
+        return pd.DataFrame(), [f"❌ หา Site ID ไม่เจอ: {site_res}"]
 
-    # หาไฟล์และดึง Download URL
-    file_path = f"{SHAREPOINT_FOLDER}/{FILE_NAME}".strip("/")
-    encoded_path = quote(file_path)
-    file_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{encoded_path}"
-    file_res = requests.get(file_url, headers=headers).json()
+    folder_path = f"{SHAREPOINT_FOLDER}".strip("/")
+    encoded_folder = quote(folder_path)
+    list_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{encoded_folder}:/children"
+    list_res = requests.get(list_url, headers=headers).json()
     
-    download_url = file_res.get('@microsoft.graph.downloadUrl')
-    if not download_url:
-        raise Exception("หาไฟล์ไม่เจอหรือไม่มีสิทธิ์เข้าถึง")
+    files = list_res.get('value', [])
+    if not files:
+        return pd.DataFrame(), ["❌ ไม่พบไฟล์ใดๆ ใน Folder SharePoint นี้"]
+
+    all_dataframes = []
+
+    for file_item in files:
+        file_name = file_item.get('name', '')
+        
+        if file_name.startswith('Payment_Detail_Report'):
+            download_url = file_item.get('@microsoft.graph.downloadUrl')
+            
+            if download_url:
+                try:
+                    # ตรวจสอบนามสกุลไฟล์เพื่อเลือก engine ที่เหมาะสม
+                    if file_name.endswith('.xlsx'):
+                        df = pd.read_excel(download_url, engine='openpyxl', dtype=str)
+                        all_dataframes.append(df)
+                        logs.append(f"✅ สำเร็จ (Excel .xlsx): {file_name} ({len(df)} แถว)")
+                    elif file_name.endswith('.xls'):
+                        df = pd.read_excel(download_url, engine='xlrd', dtype=str)
+                        all_dataframes.append(df)
+                        logs.append(f"✅ สำเร็จ (Excel .xls): {file_name} ({len(df)} แถว)")
+                    else:
+                        # กรณีไม่มีนามสกุล หรือไฟล์อื่นๆ ลอง Excel ก่อน
+                        df = pd.read_excel(download_url, dtype=str)
+                        all_dataframes.append(df)
+                        logs.append(f"✅ สำเร็จ (Excel): {file_name} ({len(df)} แถว)")
+                except Exception as e1:
+                    try:
+                        df = pd.read_csv(download_url, dtype=str, encoding='utf-8-sig')
+                        all_dataframes.append(df)
+                        logs.append(f"✅ สำเร็จ (CSV UTF-8): {file_name} ({len(df)} แถว)")
+                    except Exception as e2:
+                        try:
+                            df = pd.read_csv(download_url, dtype=str, encoding='cp874')
+                            all_dataframes.append(df)
+                            logs.append(f"✅ สำเร็จ (CSV ภาษาไทย TIS-620): {file_name} ({len(df)} แถว)")
+                        except Exception as e3:
+                            logs.append(f"❌ ล้มเหลว: {file_name} - {str(e1)[:100]}")
+
+    if not all_dataframes:
+         return pd.DataFrame(), logs + ["❌ ไม่พบไฟล์ที่สามารถอ่านข้อมูลได้เลย"]
     
-    # อ่านข้อมูล 2 Sheets
-    # ระบุ dtype เพื่อป้องกันตัวเลขรหัสต่างๆ เพี้ยน
-    dtype_spec = {
-        'เลขที่อ้างอิงรายการ': str,
-        'บัญชีหักเงิน': str,
-        'บัญชีผู้รับเงิน': str,
-        'รหัสธนาคาร': str,
-        'เลขประจำตัวผู้เสียภาษี': str
-    }
+    combined_df = pd.concat(all_dataframes, ignore_index=True)
+    combined_df.columns = combined_df.columns.astype(str).str.strip()
     
-    df_main = pd.read_excel(download_url, sheet_name='Payment_Detail_Report', dtype=dtype_spec)
-    df_show = pd.read_excel(download_url, sheet_name='Show_Column')
-    
-    return df_main, df_show
+    return combined_df, logs
 
 # --- API Endpoints ---
 
-@app.get("/api/search")
-async def search_vendor(q: str = Query(..., description="คำค้นหา (ชื่อหรือเลขประจำตัวผู้เสียภาษี)")):
+@app.get("/")
+async def root():
+    return {"message": "✅ API is running! โปรดเรียกใช้งานผ่าน Frontend หรือไปที่ /debug/data เพื่อดูข้อมูลดิบ"}
+
+@app.get("/search")
+async def search_vendor(q: str = Query(..., description="คำค้นหา (เลขรหัส Invoice เท่านั้น)")):
     try:
-        # 1. ดึงข้อมูลล่าสุด
-        df_main, df_show = fetch_excel_data()
+        df_main, logs = fetch_all_excel_data()
         
-        # 2. จัดการเรื่องคอลัมน์ที่จะแสดงผล (Logic เดิมที่คุณ Art ต้องการ)
-        columns_to_show = df_show[df_show['Show'].str.upper() == 'YES']['Name'].tolist()
-        # กรองเฉพาะคอลัมน์ที่มีอยู่จริงในไฟล์หลัก
-        valid_columns = [col for col in columns_to_show if col in df_main.columns]
+        if df_main.empty:
+            return {"count": 0, "results": [], "message": "ตารางข้อมูลว่างเปล่า (อ่านไฟล์ไม่สำเร็จ)", "logs": logs}
+            
+        if 'รายละเอียดของรายการ' not in df_main.columns:
+             return {"count": 0, "results": [], "message": f"ไม่พบคอลัมน์ 'รายละเอียดของรายการ'", "logs": logs}
+
+        # สร้างคอลัมน์ Invoice_Number โดยตัดคำที่เว้นวรรค
+        df_main['Invoice_Number'] = df_main['รายละเอียดของรายการ'].astype(str).str.strip().str.split().str[0]
         
-        # 3. ค้นหาข้อมูล
-        query = q.strip().lower()
-        # ค้นหาแบบคลุมเครือจากทุกคอลัมน์ที่มี
-        mask = df_main.astype(str).apply(lambda x: x.str.contains(query, case=False, na=False)).any(axis=1)
-        result_df = df_main[mask].copy()
+        query = q.strip().upper()
+        result_df = df_main[df_main['Invoice_Number'].str.upper() == query].copy()
         
         if result_df.empty:
-            return {"count": 0, "results": []}
+            return {"count": 0, "results": [], "message": "ไม่พบข้อมูลรายการดังกล่าว", "logs": logs}
 
-        # 4. จัดการ Format ข้อมูลก่อนส่งกลับ (วันที่และตัวเลข)
-        # กรองเอาเฉพาะคอลัมน์ที่เราตกลงว่าจะโชว์
+        valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
         final_data = result_df[valid_columns].copy()
         
-        # แปลงวันที่ให้เป็น Format YYYY-MM-DD
-        for col in final_data.columns:
-            if pd.api.types.is_datetime64_any_dtype(final_data[col]):
-                final_data[col] = final_data[col].dt.strftime('%Y-%m-%d')
+        # แนบ Invoice_Number กลับไปให้หน้าเว็บแสดงผลด้วย
+        final_data['Invoice_Number'] = result_df['Invoice_Number']
         
-        # แปลงเป็น JSON List of Objects
-        # .to_dict(orient='records') จะทำให้ JavaScript อ่านง่ายที่สุด
         records = final_data.fillna("-").to_dict(orient='records')
         
         return {
             "count": len(records),
+            "results": records,
+            "logs": logs
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/debug/data")
+async def debug_all_data():
+    """ดึงข้อมูลและ Log แบบละเอียดยิบมาให้โปรแกรมเมอร์ดู"""
+    try:
+        df_main, logs = fetch_all_excel_data()
+        
+        if df_main.empty:
+             return {
+                 "message": "❌ ตารางข้อมูลว่างเปล่า กรุณาเช็ค Log ว่าอ่านไฟล์ได้หรือไม่",
+                 "count": 0, 
+                 "results": [], 
+                 "logs": logs
+             }
+
+        if 'รายละเอียดของรายการ' not in df_main.columns:
+             return {
+                 "message": "❌ อ่านไฟล์ได้ แต่ไม่พบคอลัมน์ 'รายละเอียดของรายการ'",
+                 "count": 0, 
+                 "results": [], 
+                 "logs": logs,
+                 "columns_found": list(df_main.columns)
+             }
+
+        df_main['Invoice_Number'] = df_main['รายละเอียดของรายการ'].astype(str).str.strip().str.split().str[0]
+        
+        debug_columns = TARGET_COLUMNS + ["Invoice_Number"]
+        valid_columns = [col for col in debug_columns if col in df_main.columns]
+        final_data = df_main[valid_columns].copy()
+        
+        records = final_data.fillna("-").to_dict(orient='records')
+        
+        return {
+            "message": "✅ อ่านข้อมูลสำเร็จ!",
+            "count": len(records),
+            "logs": logs,
+            "columns_found": list(df_main.columns),
             "results": records
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/health")
+@app.get("/health")
 async def health_check():
-    return {"status": "online", "message": "Backend is running smoothly"}
+    return {"status": "online", "message": "Backend is running"}
 
 if __name__ == "__main__":
     import uvicorn
-    # รันบนเครื่องตัวเองที่พอร์ต 8000
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -89,15 +89,24 @@ pip install -r requirements.txt
 
 ### ขั้นตอนที่สาม: ตั้งค่าไฟล์ .env (สำคัญ!)
 
-เปิดไฟล์ `.env` และใส่ค่าต่อไปนี้ (ขอจากผู้ดูแล SharePoint):
+สร้างไฟล์ `.env` ในโฟลเดอร์โปรเจค และใส่ค่าต่อไปนี้:
 
-```
+```env
+# Azure AD Authentication
 TENANT_ID=<Azure AD Tenant ID>
 CLIENT_ID=<Azure Application ID>
 CLIENT_SECRET=<Azure Application Secret>
+
+# SharePoint Configuration
 SHAREPOINT_SITE_NAME=<ชื่อ SharePoint Site>
-SHAREPOINT_HOST=<Host domain เช่น carchula.sharepoint.com>
-SHAREPOINT_FOLDER=<Folder ที่เก็บ Excel>
+SHAREPOINT_HOST=carchula.sharepoint.com
+SHAREPOINT_FOLDER=Test Vendor
+```
+
+**📝 หมายเหตุ:**
+- ระบบจะอ่าน**ทุกไฟล์**ที่ชื่อขึ้นต้นด้วย `Payment_Detail_Report` ใน Folder ที่ระบุ
+- รองรับทั้งไฟล์ `.xlsx` (Excel 2007+) และ `.xls` (Excel 97-2003)
+- ไม่ต้องระบุชื่อไฟล์เฉพาะเจาะจง (ลบ `FILE_NAME` ออกแล้ว)
 FILE_NAME=<ชื่อไฟล์ Excel>
 ```
 
@@ -274,19 +283,23 @@ git push -u origin main
 
 ### **ขั้นตอนที่ 4: ตั้งค่า Environment Variables (สำคัญ!)**
 
-Vercel จะแสดงหน้ากำหนด Environment Variables:
+Vercel จะแสดงหน้ากำหนด Environment Variables (เหมือนไฟล์ `.env`):
 
-```
+```env
+# Azure AD Authentication
 TENANT_ID = <ขอจากผู้ดูแล Azure>
 CLIENT_ID = <ขอจากผู้ดูแล Azure>
 CLIENT_SECRET = <ขอจากผู้ดูแล Azure>
+
+# SharePoint Configuration
 SHAREPOINT_SITE_NAME = <ชื่อ SharePoint>
 SHAREPOINT_HOST = carchula.sharepoint.com
 SHAREPOINT_FOLDER = Test Vendor
-FILE_NAME = Payment_Detail_Report.xlsx
 ```
 
 ✅ **สำคัญ**: ห้ามเพิ่ม `.env` ไว้ใน GitHub (security risk) → ใส่ใน Vercel Dashboard แทน
+
+**📝 ระบบจะอ่านทุกไฟล์ที่ชื่อขึ้นต้นด้วย `Payment_Detail_Report` โดยอัตโนมัติ**
 
 ---
 
@@ -319,11 +332,13 @@ git push origin main
 ---
 
 ### **📍 ที่อยู่ของ Frontend และ Backend:**
-### **📍 หมายเหตุ Link มันได้แค่หลังบ้าน ไม่ได้ Frontend!!! ไม่รู้เพราะอะไร???**
+
 | ส่วน | URL |
 |------|-----|
-| Frontend | `https://vendor-payment-tracking.vercel.app` | 
+| Frontend | `https://vendor-payment-tracking.vercel.app/index.html` ⭐ **ใช้ URL นี้** |
 | Backend API | `https://vendor-payment-tracking.vercel.app/api` |
+
+**⚠️ หมายเหตุ:** หากเข้า Root URL (`https://vendor-payment-tracking.vercel.app`) จะได้ข้อความ `{"detail":"Not Found"}` เนื่องจาก Vercel route ไปยัง `/api` ตามค่า default - **ให้ใช้ `/index.html` ที่ท้าย URL เพื่อเข้า Frontend**
 
 ---
 
@@ -343,10 +358,38 @@ git push origin main
 
 ## �📚 เทคโนโลยีที่ใช้
 
-- **Backend:** FastAPI + Python
-- **Frontend:** HTML + CSS + JavaScript
-- **Database:** Excel บน SharePoint
-- **Authentication:** Azure AD / MSAL
+- **Backend:** FastAPI + Python 3.x
+- **Frontend:** HTML5 + CSS3 + JavaScript (Vanilla JS)
+- **UI Framework:** Pico.css (Minimal CSS Framework)
+- **Database:** Excel Files (.xlsx, .xls) บน SharePoint
+- **Authentication:** Microsoft Azure AD + MSAL
+- **Libraries:** 
+  - `pandas` - จัดการข้อมูล Excel
+  - `openpyxl` - อ่านไฟล์ .xlsx
+  - `xlrd` - อ่านไฟล์ .xls (Excel 97-2003)
+  - `msal` - Microsoft Authentication Library
+
+---
+
+## 🔍 คุณสมบัติของระบบ
+
+### ระบบค้นหา:
+- ✅ ค้นหาด้วยเลข Invoice (จับจาก "รายละเอียดของรายการ")
+- ✅ รองรับ Invoice ที่มีรูปแบบหลากหลาย (ไม่จำกัดรูปแบบ)
+- ✅ แสดงเฉพาะ 7 คอลัมน์ที่สำคัญ:
+  - วันที่รายการมีผล
+  - บัญชีผู้รับเงิน
+  - ชื่อผู้รับเงิน
+  - ธนาคาร
+  - สาขาธนาคารผู้รับเงิน
+  - จำนวนเงิน
+  - รายละเอียดของรายการ
+
+### ระบบดึงข้อมูล:
+- ✅ อ่าน**ทุกไฟล์**ที่ชื่อขึ้นต้นด้วย `Payment_Detail_Report` อัตโนมัติ
+- ✅ รองรับทั้งไฟล์ .xlsx และ .xls
+- ✅ รวมข้อมูลจากหลายไฟล์เป็นชุดข้อมูลเดียว
+- ✅ แสดง logs การอ่านไฟล์ที่ `/debug/data` endpoint
 
 ---
 
