@@ -178,12 +178,20 @@ async def debug_all_data_local():
     return await debug_all_data_impl()
 
 # API Debug endpoint สำหรับ Vercel - ปิดไว้ (ส่ง 404)
-@app.api_route("/api/debug/data", methods=["GET"])
-async def debug_all_data_vercel():
-    """
-     endpoint นี้ปิดใน Vercel เพื่อรักษาความปลอดภัยข้อมูล
-    """
-    raise HTTPException(status_code=404, detail="Not Found")
+# ⚠️ เปิดการสนับสนุนสำหรับ debug ใน local เท่านั้น!
+# หากต้องการเปิด Debug บน Vercel หากวิธีด้านล่าง:
+# 1. ยกเลิกคอมเม้นบรรทัดด้านล่าง
+# 2. Push ไป GitHub/Vercel
+# 3. ทำการดีบัก
+# 4. คอมเม้นกลับเพื่อความปลอดภัย
+# ────────────────────────────────────────────────────
+# @app.api_route("/api/debug/data", methods=["GET"])
+# async def debug_all_data_vercel():
+#     """
+#      endpoint นี้ปิดใน Vercel เพื่อรักษาความปลอดภัยข้อมูล
+#     """
+#     return await debug_all_data_impl()
+# ────────────────────────────────────────────────────
 
 async def debug_all_data_impl():
     """Implementation ของ debug endpoint"""
