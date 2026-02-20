@@ -1,3 +1,11 @@
+/* --- Responsive Font Sizing --- */
+/* บน Mobile ใช้ขนาด default, บน Desktop ลดเหลือ 80% */
+@media (min-width: 640px) {
+    :root {
+        font-size: 80%;
+    }
+}
+
 /* --- ตั้งค่าธีมสีและฟอนต์ --- */
 :root {
     --pico-font-family: 'Sarabun', sans-serif;

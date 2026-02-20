@@ -170,14 +170,20 @@ async def search_vendor(q: str = Query(..., description="คำค้นหา (
 # Debug endpoint สำหรับ Local (ไม่มี /api prefix)
 @app.get("/debug/data")
 async def debug_all_data_local():
-    """ดึงข้อมูลและ Log แบบละเอียดยิบมาให้โปรแกรมเมอร์ดู (Local)"""
+    """
+    ดึงข้อมูลและ Log แบบละเอียดยิบมาให้โปรแกรมเมอร์ดู (Local เท่านั้น)
+    ⚠️ Endpoint นี้เปิดเฉพาะ localhost:8000/debug/data เท่านั้น
+    บน Vercel ปิดทั้งหมด
+    """
     return await debug_all_data_impl()
 
-# Debug endpoint สำหรับ Vercel (มี /api prefix)
-@app.get("/api/debug/data")
-async def debug_all_data():
-    """ดึงข้อมูลและ Log แบบละเอียดยิบมาให้โปรแกรมเมอร์ดู (Vercel)"""
-    return await debug_all_data_impl()
+# API Debug endpoint สำหรับ Vercel - ปิดไว้ (ส่ง 404)
+@app.api_route("/api/debug/data", methods=["GET"])
+async def debug_all_data_vercel():
+    """
+     endpoint นี้ปิดใน Vercel เพื่อรักษาความปลอดภัยข้อมูล
+    """
+    raise HTTPException(status_code=404, detail="Not Found")
 
 async def debug_all_data_impl():
     """Implementation ของ debug endpoint"""
