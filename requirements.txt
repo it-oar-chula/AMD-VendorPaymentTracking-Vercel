@@ -6,4 +6,3 @@ xlrd
 msal
 requests
 python-dotenv
-line-bot-sdk

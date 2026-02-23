@@ -21,8 +21,3 @@ IDE settings
 
 .vscode/
 .idea/
-
-Development Scripts (Local only)
-
-run-dev.ps1
-close-dev.ps1

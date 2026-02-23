@@ -2,10 +2,16 @@ import os
 import pandas as pd
 import msal
 import requests
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from urllib.parse import quote
 from dotenv import load_dotenv
+from typing import Optional
+import logging
+
+# ตั้งค่า Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # โหลดค่าจากไฟล์ .env
 load_dotenv()
@@ -27,7 +33,13 @@ SHAREPOINT_SITE_NAME = os.getenv("SHAREPOINT_SITE_NAME")
 SHAREPOINT_HOST = os.getenv("SHAREPOINT_HOST", "carchula.sharepoint.com")
 SHAREPOINT_FOLDER = os.getenv("SHAREPOINT_FOLDER", "Test Vendor")
 
-# กำหนดคอลัมน์ที่สนใจ 7 คอลัมน์ + เพิ่มสถานะรายการ เพื่อให้เว็บแสดงผลป้ายสีได้
+# --- API Authentication (Bearer Token) ---
+# ควรจะเก็บไว้ใน environment variable เดียว แต่สำหรับ development เขียนแบบ fallback
+DEFAULT_API_KEY = os.getenv("API_KEY", "vendor-tracking-secret-key-12345")
+if DEFAULT_API_KEY == "vendor-tracking-secret-key-12345":
+    logger.warning("⚠️  WARNING: Using default API key. Set API_KEY environment variable in production!")
+
+# กำหนดคอลัมน์ที่สนใจ 7 คอลัมน์
 TARGET_COLUMNS = [
     "วันที่รายการมีผล", 
     "บัญชีผู้รับเงิน", 
@@ -39,7 +51,32 @@ TARGET_COLUMNS = [
     "สถานะรายการ" 
 ]
 
+# --- Dependency: Bearer Token Authentication ---
+async def verify_api_key(authorization: Optional[str] = Header(None)) -> bool:
+    """
+    ตรวจสอบ Bearer Token
+    ใช้ได้กับ n8n / external systems ที่ต้องตรวจสอบ API Key
+    
+    ตัวอย่าง Header:
+    Authorization: Bearer vendor-tracking-secret-key-12345
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    
+    # ตรวจสอบรูป "Bearer <token>"
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid Authorization format. Use: Bearer <token>")
+    
+    token = parts[1]
+    if token != DEFAULT_API_KEY:
+        logger.warning(f"❌ Invalid API key attempt: {token[:10]}...")
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
+    return True
+
 def get_access_token():
+    """ขอ Access Token จาก Azure AD"""
     authority = f"https://login.microsoftonline.com/{TENANT_ID}"
     client_app = msal.ConfidentialClientApplication(
         CLIENT_ID, authority=authority, client_credential=CLIENT_SECRET
@@ -48,7 +85,7 @@ def get_access_token():
     return result.get("access_token")
 
 def fetch_all_excel_data():
-    """ดึงข้อมูลจากทุกไฟล์ คืนค่ากลับมาเป็น (DataFrame, รายการLog)"""
+    """ดึงข้อมูลจากทุกไฟล์ Excel บน SharePoint"""
     logs = []
     token = get_access_token()
     if not token:
@@ -56,12 +93,14 @@ def fetch_all_excel_data():
     
     headers = {'Authorization': f'Bearer {token}'}
     
+    # รับ Site ID
     site_url = f"https://graph.microsoft.com/v1.0/sites/{SHAREPOINT_HOST}:/sites/{SHAREPOINT_SITE_NAME}"
     site_res = requests.get(site_url, headers=headers).json()
     site_id = site_res.get('id')
     if not site_id:
-        return pd.DataFrame(), [f"❌ หา Site ID ไม่เจอ: {site_res}"]
+        return pd.DataFrame(), [f"❌ หา Site ID ไม่เจอ"]
 
+    # รับไฟล์ในโฟลเดอร์
     folder_path = f"{SHAREPOINT_FOLDER}".strip("/")
     encoded_folder = quote(folder_path)
     list_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{encoded_folder}:/children"
@@ -76,12 +115,13 @@ def fetch_all_excel_data():
     for file_item in files:
         file_name = file_item.get('name', '')
         
+        # อ่านเฉพาะไฟล์ที่ขึ้นต้นด้วย "Payment_Detail_Report"
         if file_name.startswith('Payment_Detail_Report'):
             download_url = file_item.get('@microsoft.graph.downloadUrl')
             
             if download_url:
                 try:
-                    # ตรวจสอบนามสกุลไฟล์เพื่อเลือก engine ที่เหมาะสม
+                    # ตรวจสอบนามสกุลไฟล์
                     if file_name.endswith('.xlsx'):
                         df = pd.read_excel(download_url, engine='openpyxl', dtype=str)
                         all_dataframes.append(df)
@@ -91,7 +131,6 @@ def fetch_all_excel_data():
                         all_dataframes.append(df)
                         logs.append(f"✅ สำเร็จ (Excel .xls): {file_name} ({len(df)} แถว)")
                     else:
-                        # กรณีไม่มีนามสกุล หรือไฟล์อื่นๆ ลอง Excel ก่อน
                         df = pd.read_excel(download_url, dtype=str)
                         all_dataframes.append(df)
                         logs.append(f"✅ สำเร็จ (Excel): {file_name} ({len(df)} แถว)")
@@ -104,23 +143,24 @@ def fetch_all_excel_data():
                         try:
                             df = pd.read_csv(download_url, dtype=str, encoding='cp874')
                             all_dataframes.append(df)
-                            logs.append(f"✅ สำเร็จ (CSV ภาษาไทย TIS-620): {file_name} ({len(df)} แถว)")
+                            logs.append(f"✅ สำเร็จ (CSV ภาษาไทย): {file_name} ({len(df)} แถว)")
                         except Exception as e3:
-                            logs.append(f"❌ ล้มเหลว: {file_name} - {str(e1)[:100]}")
+                            logs.append(f"❌ ล้มเหลว: {file_name}")
 
     if not all_dataframes:
-         return pd.DataFrame(), logs + ["❌ ไม่พบไฟล์ที่สามารถอ่านข้อมูลได้เลย"]
+         return pd.DataFrame(), logs + ["❌ ไม่พบไฟล์ที่สามารถอ่านข้อมูลได้"]
     
+    # รวมข้อมูลจากทุกไฟล์
     combined_df = pd.concat(all_dataframes, ignore_index=True)
     combined_df.columns = combined_df.columns.astype(str).str.strip()
     
-    # ลบข้อมูลซ้ำ (กรณีมีข้อมูลเดียวกันอยู่หลายไฟล์)
+    # ลบข้อมูลซ้ำ
     before_count = len(combined_df)
     combined_df = combined_df.drop_duplicates()
     after_count = len(combined_df)
     
     if before_count > after_count:
-        logs.append(f"ℹ️ ลบข้อมูลซ้ำ: {before_count - after_count} รายการ (เหลือ {after_count} รายการ)")
+        logs.append(f"ℹ️ ลบข้อมูลซ้ำ: {before_count - after_count} รายการ")
     
     return combined_df, logs
 
@@ -128,32 +168,71 @@ def fetch_all_excel_data():
 
 @app.get("/")
 async def root():
-    return {"status": "online", "service": "Vendor Payment Tracking API", "message": "โปรดไปที่ /index.html เพื่อเข้าสู่หน้าค้นหาข้อมูลสถานะการจ่ายเงิน"}
+    """API Root - ข้อมูลทั่วไป"""
+    return {
+        "status": "online",
+        "service": "Vendor Payment Tracking API",
+        "version": "2.0",
+        "endpoints": [
+            "/api/health",
+            "/api/search",
+            "/api/n8n/search"
+        ]
+    }
+
+@app.get("/api/health")
+async def health_check():
+    """Health Check Endpoint"""
+    return {
+        "status": "online",
+        "message": "Backend is running",
+        "version": "2.0"
+    }
 
 @app.get("/api/search")
-async def search_vendor(q: str = Query(..., description="คำค้นหา (เลขรหัส Invoice เท่านั้น)")):
+async def search_vendor(q: str = Query(..., description="คำค้นหา Invoice Number")):
+    """
+    ค้นหาข้อมูล Invoice - ใช้จากเว็บ Frontend
+    ไม่ต้องมี Authentication
+    
+    ตัวอย่าง: GET /api/search?q=INV001234
+    """
     try:
         df_main, logs = fetch_all_excel_data()
         
         if df_main.empty:
-            return {"count": 0, "results": [], "message": "ตารางข้อมูลว่างเปล่า (อ่านไฟล์ไม่สำเร็จ)", "logs": logs}
+            return {
+                "count": 0,
+                "results": [],
+                "message": "ตารางข้อมูลว่างเปล่า",
+                "logs": logs
+            }
             
         if 'รายละเอียดของรายการ' not in df_main.columns:
-             return {"count": 0, "results": [], "message": f"ไม่พบคอลัมน์ 'รายละเอียดของรายการ'", "logs": logs}
+             return {
+                 "count": 0,
+                 "results": [],
+                 "message": "ไม่พบคอลัมน์ที่ต้องการ",
+                 "logs": logs
+             }
 
-        # สร้างคอลัมน์ Invoice_Number โดยตัดคำที่เว้นวรรค
+        # สร้าง Invoice_Number column
         df_main['Invoice_Number'] = df_main['รายละเอียดของรายการ'].astype(str).str.strip().str.split().str[0]
         
         query = q.strip().upper()
         result_df = df_main[df_main['Invoice_Number'].str.upper() == query].copy()
         
         if result_df.empty:
-            return {"count": 0, "results": [], "message": "ไม่พบข้อมูลรายการดังกล่าว", "logs": logs}
+            return {
+                "count": 0,
+                "results": [],
+                "message": "ไม่พบข้อมูลรายการดังกล่าว",
+                "logs": logs
+            }
 
+        # เลือกเฉพาะคอลัมน์ที่สนใจ
         valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
         final_data = result_df[valid_columns].copy()
-        
-        # แนบ Invoice_Number กลับไปให้หน้าเว็บแสดงผลด้วย
         final_data['Invoice_Number'] = result_df['Invoice_Number']
         
         records = final_data.fillna("-").to_dict(orient='records')
@@ -165,16 +244,77 @@ async def search_vendor(q: str = Query(..., description="คำค้นหา (
         }
 
     except Exception as e:
+        logger.error(f"Error in search: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-# Health check endpoints (สำหรับ Local และ Vercel)
-@app.get("/health")
-async def health_check_local():
-    return {"status": "online", "message": "Backend is running"}
+@app.get("/api/n8n/search")
+async def n8n_search_vendor(
+    q: str = Query(..., description="Invoice Number"),
+    _: bool = Depends(verify_api_key)
+):
+    """
+    ค้นหาข้อมูล Invoice สำหรับ n8n - ต้องมี Bearer Token Authentication
+    
+    ตัวอย่าง:
+    GET /api/n8m/search?q=INV001234
+    Header: Authorization: Bearer vendor-tracking-secret-key-12345
+    """
+    try:
+        df_main, logs = fetch_all_excel_data()
+        
+        if df_main.empty:
+            return {
+                "success": False,
+                "message": "ไม่สามารถดึงข้อมูลจาก SharePoint ได้",
+                "data": None
+            }
+            
+        if 'รายละเอียดของรายการ' not in df_main.columns:
+             return {
+                 "success": False,
+                 "message": "ไม่พบคอลัมน์ 'รายละเอียดของรายการ'",
+                 "data": None
+             }
 
-@app.get("/api/health")
-async def health_check():
-    return {"status": "online", "message": "Backend is running"}
+        # สร้าง Invoice_Number
+        df_main['Invoice_Number'] = df_main['รายละเอียดของรายการ'].astype(str).str.strip().str.split().str[0]
+        
+        query = q.strip().upper()
+        result_df = df_main[df_main['Invoice_Number'].str.upper() == query].copy()
+        
+        if result_df.empty:
+            return {
+                "success": False,
+                "message": f"ไม่พบข้อมูล Invoice: {q}",
+                "data": None
+            }
+
+        # เลือกคอลัมน์
+        valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
+        final_data = result_df[valid_columns].copy()
+        final_data['Invoice_Number'] = result_df['Invoice_Number']
+        
+        records = final_data.fillna("-").to_dict(orient='records')
+        
+        logger.info(f"✅ n8n query for Invoice {q}: Found {len(records)} record(s)")
+        
+        return {
+            "success": True,
+            "count": len(records),
+            "data": records[0] if len(records) == 1 else records,
+            "message": f"สำเร็จ - พบข้อมูล {len(records)} รายการ"
+        }
+
+    except HTTPException as e:
+        # Re-raise HTTP exceptions (authentication errors)
+        raise e
+    except Exception as e:
+        logger.error(f"Error in n8m search: {e}", exc_info=True)
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "data": None
+        }
 
 if __name__ == "__main__":
     import uvicorn

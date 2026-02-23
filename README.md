@@ -1,404 +1,410 @@
-# 📊 Vendor Payment Tracking System
+# 📊 Vendor Payment Tracking System v2.0
 
 ระบบติดตามสถานะการชำระเงินให้ผู้จำหน่าย สำหรับสำนักงานวิทยทรัพยากร จุฬาลงกรณ์มหาวิทยาลัย
 
+🌐 **Web Interface** | 🔌 **n8m Integration** | ☁️ **Vercel Deployment-Ready**
+
 ---
 
-## 🎯 ความเป็นมา
+## 📋 สารบัญ
 
-โปรเจคนี้ใช้ดึงข้อมูลการชำระเงินจากไฟล์ Excel บน SharePoint แล้วแสดงผลผ่าน Web Interface ให้ผู้ใช้ค้นหาสถานะการจ่ายเงินได้อย่างสะดวก
+1. [ภาพรวมระบบ](#-ภาพรวมระบบ)
+2. [ความรู้พื้นฐาน](#-ความรู้พื้นฐาน)
+3. [ติดตั้ง & ตั้งค่า](#-ติดตั้ง--ตั้งค่า)
+4. [รันระบบในท้องถิ่น](#-รันระบบในท้องถิ่น)
+5. [API Endpoints](#-api-endpoints)
+6. [n8m Integration](#-n8m-integration)
+7. [Troubleshooting](#-troubleshooting)
+8. [Deploy to Production](#-deploy-to-production)
+
+---
+
+## 🎯 ภาพรวมระบบ
+
+### โปรเจคนี้ทำอะไร?
+ดึงข้อมูลการชำระเงินจากไฟล์ Excel บน SharePoint และแสดงผลผ่าน:
+- **🌐 Web Interface** - ค้นหาผ่านเว็บเบราว์เซอร์ (http://localhost:3000)
+- **🔌 n8m API** - ให้ External Systems (n8m, Zapier, etc) เรียก API ด้วย Bearer Token Authentication
 
 ### 📦 โครงสร้างโปรเจค
+
 ```
 .
 ├── api/
-│   └── index.py           # Backend API (FastAPI)
-├── public/
-│   ├── index.html         # หน้าเว็บหลัก
-│   ├── script.js          # JavaScript สำหรับการค้นหา
-│   └── style.css          # CSS สไตล์เว็บ
-├── .env                   # ไฟล์ Config (ต้องตั้งค่าเอง)
-├── requirements.txt       # ไลบรารี่ที่ต้องใช้
-├── run-dev.ps1            # Script เปิด development servers
-├── vercel.json            # Config สำหรับ Vercel deployment
-└── README.md              # ไฟล์นี้เอง
+│   └── index.py                    # Backend API (FastAPI) - 2 endpoints: /search, /n8m/search
+├── public/                         # Frontend (HTML/CSS/JS)
+│   ├── index.html
+│   ├── script.js
+│   └── style.css
+├── .env                            # Configuration
+├── requirements.txt                # Python Dependencies
+├── start-dev.ps1                   # เปิด Frontend + Backend
+├── stop-dev.ps1                    # ปิด Frontend + Backend
+├── vercel.json                     # Config สำหรับ Production
+└── README.md                       # ไฟล์นี้เอง
 ```
 
----
+### ✨ Features
 
-## � ความรู้พื้นฐาน: ทำไมต้อง Servers 2 ตัว?
-
-### โปรเจคนี้มี 2 ส่วนที่ต่างกัน ลองเข้าใจก่อนรัน!
-
-#### 🔙 **Backend API Server** (api/index.py - Port 8000)
-- เป็น **FastAPI** ที่ดึงข้อมูลจาก SharePoint
-- รับ request จาก Frontend แล้วส่งข้อมูลกลับเป็น JSON
-- เปลี่ยนข้อมูล Excel เป็นตัวเลขที่จะแสดง
-
-#### 🎨 **Frontend Server** (public/ - Port 3000)
-- เป็นหน้าเว็บ HTML + CSS + JavaScript
-- ต้อง run ผ่าน Web Server (แม้จะเป็น Static File)
-- ส่ง request ไปยัง Backend API เพื่อขอข้อมูล
+- ✅ ค้นหาสถานะการจ่ายเงิน ด้วย Invoice Number
+- ✅ Web Interface สำหรับ End Users
+- ✅ **n8m/External System Integration** ด้วย Bearer Token Authentication
+- ✅ รองรับไฟล์ Excel (.xlsx, .xls) + CSV
+- ✅ Azure AD Authentication สำหรับ SharePoint
+- ✅ Ready for Vercel Deployment
 
 ---
 
-### ❓ ทำไมไม่เหมือน `python app.py` แบบเดิม?
+## 🔍 ความรู้พื้นฐาน
 
-**ตอบ: ขึ้นอยู่กับประเภทของแอป!**
+### ❓ ทำไมต้อง 2 Servers?
 
-| ประเภท | ตัวอย่าง | วิธีรัน | เหตุผล |
-|--------|---------|--------|--------|
-| **Simple Script** | `app.py` สั่งแสดงค่า | `python app.py` | ไม่ต้อง web server |
-| **Bot/Automation** | Discord Bot | `python bot.py` | ไม่ต้อง web server |
-| **Web API เพียงอย่าง** | FastAPI เล็กๆ | `python app.py` | FastAPI มี built-in server |
-| **Web App สมบูรณ์** | **โปรเจคนี้** ⭐ | **ต้องเปิด 2 servers** | Frontend + Backend แยกกัน |
+โปรเจคนี้มี **2 ส่วนแยกกัน**:
 
----
+| ส่วน | ชื่อ | Port | Purpose |
+|------|------|------|---------|
+| 🎨 Frontend | `public/` | 3000 | Web Interface สำหรับ End Users |
+| 🔙 Backend | `api/index.py` | 8000 | API Server สำหรับ Web + External Systems |
 
-### ✅ นี่เป็นมาตรฐานหรือไม่?
-
-**ใช่ครับ 100%** นี่คือวิธีปกติของการพัฒนา Web App:
-
-✅ **Frontend** (HTML/CSS/JS) รันบน web server (ไม่ใช่แค่เปิด file)  
-✅ **Backend** (FastAPI/Node.js) รันบน process แยก  
-✅ **2 servers ต่าง port** คือสิ่ง Universal มากในการพัฒนา  
-
-**ในสภาพจริง (Production):**
-- Frontend deploy ไปที่ **Vercel / Netlify**
-- Backend deploy ไปที่ **Heroku / AWS / Azure**
-- 2 ตัวรับ requests ผ่าน Domain ที่ต่างกัน
+**เพราะ:**
+- Frontend ต้องรัน Web Server (ไม่ใช่แค่เปิดไฟล์)
+- Backend ต้องเป็น Process แยก เพื่อรับ requests
+- 2 Port ต่าง = 2 URL ต่าง
 
 ---
 
-## �🚀 วิธีเริ่มต้นการใช้งาน
+## 🚀 ติดตั้ง & ตั้งค่า
 
-### ขั้นตอนแรก: สร้าง Virtual Environment (ทำครั้งเดียว)
-
-**ใน PowerShell (วิน + X แล้วเลือก Terminal):**
+### Step 1: สร้าง Virtual Environment (ทำครั้งเดียว)
 
 ```powershell
 python -m venv .venv
 ```
 
-### ขั้นตอนที่สอง: ติดตั้ง Dependencies (ทำครั้งเดียว)
+### Step 2: ติดตั้ง Dependencies (ทำครั้งเดียว)
 
 ```powershell
-.\.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-### ขั้นตอนที่สาม: ตั้งค่าไฟล์ .env (สำคัญ!)
+### Step 3: ตั้งค่าไฟล์ `.env`
 
-สร้างไฟล์ `.env` ในโฟลเดอร์โปรเจค และใส่ค่าต่อไปนี้:
+ไฟล์ `.env` ในโปรเจคให้มีค่า:
 
 ```env
 # Azure AD Authentication
-TENANT_ID=<Azure AD Tenant ID>
-CLIENT_ID=<Azure Application ID>
-CLIENT_SECRET=<Azure Application Secret>
+TENANT_ID=<ขอจากผู้ดูแล Azure>
+CLIENT_ID=<ขอจากผู้ดูแล Azure>
+CLIENT_SECRET=<ขอจากผู้ดูแล Azure>
 
 # SharePoint Configuration
 SHAREPOINT_SITE_NAME=<ชื่อ SharePoint Site>
 SHAREPOINT_HOST=carchula.sharepoint.com
-SHAREPOINT_FOLDER=Test Vendor
+SHAREPOINT_FOLDER=<ชื่อ Folder>
+
+# API Authentication (Bearer Token for n8m)
+API_KEY=<Secret Key เดียวกับใน n8m>
 ```
 
-**📝 หมายเหตุ:**
-- ระบบจะอ่าน**ทุกไฟล์**ที่ชื่อขึ้นต้นด้วย `Payment_Detail_Report` ใน Folder ที่ระบุ
-- รองรับทั้งไฟล์ `.xlsx` (Excel 2007+) และ `.xls` (Excel 97-2003)
-- ไม่ต้องระบุชื่อไฟล์เฉพาะเจาะจง (ลบ `FILE_NAME` ออกแล้ว)
-FILE_NAME=<ชื่อไฟล์ Excel>
-```
+### 📝 หมายเหตุ:
 
-**หากไม่ทราบค่าเหล่านี้ ติดต่อผู้ดูแล Azure AD / SharePoint**
+- ❌ **ห้าม commit `.env` ไปยัง Git** (Security Risk!)
+- ✅ ใส่ใน Vercel Dashboard Environment Variables สำหรับ Production
 
 ---
 
-## 📱 วิธีรันโปรเจค
+## 🏃 รันระบบในท้องถิ่น
 
-### วิธีที่ 1: ใช้ Script (ง่ายที่สุด) ⭐ **แนะนำ**
-
-**ใน PowerShell ที่ folder โปรเจค:**
+### เปิด Servers
 
 ```powershell
-.\run-dev.ps1
+.\start-dev.ps1
 ```
 
 Script นี้จะ:
-1. ✅ Activate Virtual Environment
-2. ✅ เปิด API Server (Backend) บน Port 8000
-3. ✅ เปิด Frontend Server บน Port 3000
+- ✅ Activate Virtual Environment
+- ✅ เปิด Backend API Server (Port 8000)
+- ✅ เปิด Frontend Server (Port 3000)
 
-จากนั้น **เปิด Browser** ไปที่:
-```
-http://localhost:3000
-```
+### ✅ ตรวจสอบว่ารันสำเร็จ
 
----
+**Frontend:** http://localhost:3000
 
-### วิธีที่ 2: เปิด Manual (ถ้า Script ไม่ทำงาน)
-
-**Terminal 1 - เปิด API Server:**
+**Backend Health Check:**
 ```powershell
-.\.venv\Scripts\activate
-python api/index.py
+Invoke-WebRequest -Uri http://localhost:8000/api/health -UseBasicParsing | Select-Object -ExpandProperty Content
 ```
 
-**Terminal 2 - เปิด Frontend Server:**
-```powershell
-.\.venv\Scripts\activate
-cd public
-python -m http.server 3000
+**ผลลัพธ์ที่คาดหวัง:**
+```json
+{"status":"online","message":"Backend is running","version":"2.0"}
 ```
 
-**Browser:**
-```
-http://localhost:3000
-```
-
----
-
-## ⏹️ วิธีปิด Servers
-
-### วิธีที่ 1: ใช้ Script (ง่ายที่สุด) ⭐ **แนะนำ**
+### ปิด Servers
 
 ```powershell
-.\close-dev.ps1
+.\stop-dev.ps1
 ```
 
-Script นี้จะปิด servers ทั้ง API และ Frontend โดยอัตโนมัติ
-
 ---
 
-### วิธีที่ 2: ปิด Terminal ที่รัน Server (ถ้า Script ไม่ทำงาน)
-ปิด 2 Terminal หน้าต่างที่รัน Servers ไปแล้ว
+## 📡 API Endpoints
 
-### วิธีที่ 3: ใช้ Ctrl+C (ถ้าต้องการให้ terminal ยังเปิดอยู่)
+### 1. Health Check
 
-ในแต่ละ Terminal:
-```powershell
-Ctrl+C
+```
+GET /api/health
 ```
 
-กด **Y** เมื่อถามว่า "Terminate batch job"
+**Response:**
+```json
+{
+  "status": "online",
+  "message": "Backend is running",
+  "version": "2.0"
+}
+```
 
 ---
 
-## 🔄 รอบหน้าจะรันอย่างไร
+### 2. Website Search (ไม่ต้อง Authentication)
 
-ทุกครั้งที่ต้องการรัน:
+```
+GET /api/search?q=INV001234
+```
 
-1. เปิด **PowerShell** ที่ folder โปรเจค
-2. พิมพ์:
-   ```powershell
-   .\run-dev.ps1
-   ```
-3. เปิด Browser ไปที่ `http://localhost:3000`
-4. ทีเสร็จใช้งาน ปิด Terminal 2 ช่องที่เปิดขึ้นมา
+**Purpose:** ใช้จาก Frontend Web Interface
 
-**ตั้งแต่โปรเจคนี้ขึ้นไป คุณต้องทำให้ Servers ทำงานทุกครั้ง** ❌ ปิด VS Code ไม่ได้หมายถึงปิด Servers
+**Response:**
+```json
+{
+  "count": 1,
+  "results": [
+    {
+      "วันที่รายการมีผล": "2025-02-01",
+      "ชื่อผู้รับเงิน": "บจก. ตัวอย่าง",
+      "จำนวนเงิน": "5000",
+      "ธนาคาร": "ธนาคารกรุงเทพ",
+      "รายละเอียดของรายการ": "INV001234 ....",
+      ...
+    }
+  ],
+  "logs": ["✅ สำเร็จ (Excel .xlsx): file.xlsx (100 แถว)"]
+}
+```
 
 ---
 
-## 🐛 แก้ไขปัญหา
+### 3. n8m Search (ต้อง Bearer Token)
+
+```
+GET /api/n8m/search?q=INV001234
+Authorization: Bearer vendor-tracking-secret-key-12345
+```
+
+**Purpose:** ใช้จาก n8m / External Systems
+
+**Response:**
+```json
+{
+  "success": true,
+  "count": 1,
+  "data": {
+    "วันที่รายการมีผล": "2025-02-01",
+    "ชื่อผู้รับเงิน": "บจก. ตัวอย่าง",
+    "จำนวนเงิน": "5000",
+    "ธนาคาร": "ธนาคารกรุงเทพ",
+    "บัญชีผู้รับเงิน": "123-456-789",
+    "สาขาธนาคารผู้รับเงิน": "สยาม",
+    "รายละเอียดของรายการ": "INV001234 ....",
+    "สถานะรายการ": "จ่ายแล้ว"
+  },
+  "message": "สำเร็จ - พบข้อมูล 1 รายการ"
+}
+```
+
+---
+
+## 🔌 n8m Integration
+
+### วิธีใช้ใน n8m Workflow
+
+#### Step 1: เพิ่ม HTTP Request Node
+
+n8m → Add node → HTTP Request
+
+#### Step 2: ตั้ง Configuration
+
+| Field | Value |
+|-------|-------|
+| **Method** | GET |
+| **URL** | `{{ $env.VENDOR_TRACKING_URL }}/api/n8m/search?q={{ $node["Previous Node"].json.invoice }}` |
+| **Authentication** | Header |
+| **Header** | `Authorization: Bearer {{ $env.API_KEY }}` |
+
+#### Step 3: ตั้ง Environment Variables ใน n8m
+
+```
+VENDOR_TRACKING_URL = http://localhost:8000 (Local)
+                    = https://vendor-tracking.vercel.app (Production)
+API_KEY = vendor-tracking-secret-key-12345
+```
+
+#### Step 4: Test
+
+ส่ง request จาก n8m Workflow ไป Backend
+
+---
+
+## 🔐 API Authentication (Bearer Token)
+
+### ทำไมต้อง Authentication?
+
+```
+❌ ไม่มี Auth:
+- ใครๆ ก็เรียก API ได้
+- ข้อมูล Payment สามารถเข้าถึงได้หมด
+- Risk: Data Breach !
+
+✅ มี Bearer Token:
+- เฉพาะ n8m ที่มี API Key ถึงเรียก API ได้
+- ความปลอดภัยสูงขึ้น
+```
+
+### วิธี Verify API Key
+
+ทุก request ไปยัง `/api/n8m/*` ต้องส่ง Header:
+
+```
+Authorization: Bearer vendor-tracking-secret-key-12345
+```
+
+### Error Response (ถ้า Auth ผิด)
+
+```json
+{
+  "detail": "Invalid API key"
+}
+```
+
+---
+
+## 🐛 Troubleshooting
 
 ### ❌ "Script ไม่ทำงาน" หรือ "Access Denied"
 
-ในขั้นอื่นๆ ต้องมีสิทธิ์รัน PowerShell Script:
-
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+.\start-dev.ps1
 ```
 
-แล้วลองรัน `.\run-dev.ps1` อีกครั้ง
+---
 
 ### ❌ "ModuleNotFoundError: No module named 'pandas'"
 
-ลืม `pip install -r requirements.txt` ให้รัน:
-
 ```powershell
-.\.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-### ❌ "Port 3000 ถูกใช้งานอยู่"
+---
 
-โปรแกรมอื่นกำลังใช้ port 3000 ปิดโปรแกรมนั้นได้ หรือแก้ไขคำสั่งเป็น:
+### ❌ "Connection error to SharePoint"
 
-```powershell
-cd public
-python -m http.server 3001
+1. ตรวจสอบ `.env` มี credentials ถูกต้องหรือไม่
+2. ตรวจสอบ SharePoint Site มี Folder ตามชื่อที่กำหนด
+3. ตรวจสอบ Payment_Detail_Report ไฟล์มีข้อมูลไหม
+
+---
+
+### ❌ "n8m API request returns 401"
+
+```
+❌ Problem:
+Authorization: Bearer wrong-key
+
+✅ Solution:
+Authorization: Bearer vendor-tracking-secret-key-12345
 ```
 
-แล้วไปที่ `http://localhost:3001`
-
 ---
 
-## � Deploy ไปยัง Vercel (ระบบ Production)
+## ☁️ Deploy to Production
 
-โปรเจคนี้ **ออกแบบมาให้ Deploy บน Vercel** แล้ว นี่คือวิธีการ:
-
-### **ที่ต้องเตรียม:**
-- ✅ GitHub Account (ฟรี)
-- ✅ Vercel Account (ฟรี)
-
-### **ขั้นตอนที่ 1: สร้าง GitHub Repository**
-
-1. ไปที่ https://github.com/new
-2. ตั้งชื่อ Repository: `AMD-VendorPaymentTracking-Vercel`
-3. เลือก **Public** (free plan)
-4. คลิก **Create repository**
-(https://github.com/it-oar-chula/AMD-VendorPaymentTracking-Vercel.git)
-
----
-
-### **ขั้นตอนที่ 2: Push โค้ดขึ้น GitHub**
-
-**ใน PowerShell ที่ folder โปรเจค:**
+### Step 1: Push code to GitHub
 
 ```powershell
-# สั่งครั้งแรกเท่านั้น
 git init
 git add .
-git commit -m "Initial commit: Vendor Payment Tracking"
-git remote add origin https://github.com/it-oar-chula/AMD-VendorPaymentTracking-Vercel.git
+git commit -m "Vendor Payment Tracking v2.0"
+git remote add origin https://github.com/YOUR_USERNAME/vendor-tracking.git
 git branch -M main
 git push -u origin main
 ```
 
-✅ ตรวจสอบ: ไปที่ GitHub จะเห็น code
-
----
-
-### **ขั้นตอนที่ 3: สร้าง Vercel Account และ Deploy**
+### Step 2: Deploy to Vercel
 
 1. ไปที่ https://vercel.com
-2. คลิก **Sign Up** → **Continue with GitHub**
-3. Authorize Vercel
-4. ไปที่ Dashboard → **Add New** → **Project**
-5. เลือก Repository: **vendor-payment-tracking**
-6. คลิก **Import**
+2. Import Repository
+3. Set Environment Variables:
 
----
-
-### **ขั้นตอนที่ 4: ตั้งค่า Environment Variables (สำคัญ!)**
-
-Vercel จะแสดงหน้ากำหนด Environment Variables (เหมือนไฟล์ `.env`):
-
-```env
-# Azure AD Authentication
-TENANT_ID = <ขอจากผู้ดูแล Azure>
-CLIENT_ID = <ขอจากผู้ดูแล Azure>
-CLIENT_SECRET = <ขอจากผู้ดูแล Azure>
-
-# SharePoint Configuration
-SHAREPOINT_SITE_NAME = <ชื่อ SharePoint>
+```
+TENANT_ID = <Azure>
+CLIENT_ID = <Azure>
+CLIENT_SECRET = <Azure>
+SHAREPOINT_SITE_NAME = <SharePoint>
 SHAREPOINT_HOST = carchula.sharepoint.com
-SHAREPOINT_FOLDER = Test Vendor
+SHAREPOINT_FOLDER = <Folder>
+API_KEY = <Change this to something secure!>
 ```
 
-✅ **สำคัญ**: ห้ามเพิ่ม `.env` ไว้ใน GitHub (security risk) → ใส่ใน Vercel Dashboard แทน
+4. Deploy
 
-**📝 ระบบจะอ่านทุกไฟล์ที่ชื่อขึ้นต้นด้วย `Payment_Detail_Report` โดยอัตโนมัติ**
+### Step 3: Update n8m
 
----
+เปลี่ยน URL ใน n8m:
 
-### **ขั้นตอนที่ 5: Deploy**
-
-1. คลิก **Deploy**
-2. รอ 2-3 นาที
-3. จะได้ URL แบบนี้: `https://vendor-payment-tracking.vercel.app`
-
----
-
-### **ขั้นตอนที่ 6: ทดสอบ**
-
-1. เข้าไป URL ที่ได้
-2. ทดสอบค้นหาข้อมูล
-3. ควรใช้งานได้เลย!
-
----
-
-### **ทีหลังจะ Update Code?**
-
-```powershell
-git add .
-git commit -m "Update: description"
-git push origin main
+```
+From: http://localhost:8000
+To:   https://vendor-tracking.vercel.app
 ```
 
-**Vercel จะ Auto Deploy ให้เอง** ไม่ต้องทำอะไรเพิ่ม ✅
+### Step 4: Test Production
+
+```
+GET https://vendor-tracking.vercel.app/api/n8m/search?q=INV001234
+Authorization: Bearer <API_KEY>
+```
 
 ---
 
-### **📍 ที่อยู่ของ Frontend และ Backend:**
+## 📚 ข้อเพิ่มเติม
 
-| ส่วน | URL |
-|------|-----|
-| Frontend | `https://vendor-payment-tracking.vercel.app/index.html` ⭐ **ใช้ URL นี้** |
-| Backend API | `https://vendor-payment-tracking.vercel.app/api` |
+### ส่วนข้อมูล (Columns) ที่บันทึก
 
-**⚠️ หมายเหตุ:** หากเข้า Root URL (`https://vendor-payment-tracking.vercel.app`) จะได้ข้อความ `{"detail":"Not Found"}` เนื่องจาก Vercel route ไปยัง `/api` ตามค่า default - **ให้ใช้ `/index.html` ที่ท้าย URL เพื่อเข้า Frontend**
+ระบบเก็บข้อมูล 8 คอลัมน์ต่อไปนี้:
 
----
+1. **วันที่รายการมีผล** - วันที่อ้างอิงชำระ
+2. **บัญชีผู้รับเงิน** - เลขบัญชีธนาคาร
+3. **ชื่อผู้รับเงิน** - ชื่อผู้รับ
+4. **ธนาคาร** - ชื่อธนาคาร
+5. **สาขาธนาคารผู้รับเงิน** - สาขา
+6. **จำนวนเงิน** - ยอด Payment
+7. **รายละเอียดของรายการ** - Invoice Number + Description
+8. **สถานะรายการ** - สถานะปัจจุบัน
 
-### **ข้อจำกัด Free Tier:**
+### ไฟล์ที่เข้าใจได้
 
-✅ **ฟรี:**
-- Deployment ไม่จำกัด
-- 160,000 requests/เดือน
-- Domain vercel.app
-- HTTPS ฟรี
+- ✅ Excel (.xlsx, .xls)
+- ✅ CSV (UTF-8, ภาษาไทย)
 
-❌ **อาจมีปัญหา:**
-- ขาดทั่ว (cold start) ~1 วินาที ครั้งแรก
-- Database บน SharePoint เน้ือที่ขึ้นอยู่กับ Microsoft ไม่ใช่ Vercel
+### ชื่อไฟล์ที่อ่าน
 
----
-
-## �📚 เทคโนโลยีที่ใช้
-
-- **Backend:** FastAPI + Python 3.x
-- **Frontend:** HTML5 + CSS3 + JavaScript (Vanilla JS)
-- **UI Framework:** Pico.css (Minimal CSS Framework)
-- **Database:** Excel Files (.xlsx, .xls) บน SharePoint
-- **Authentication:** Microsoft Azure AD + MSAL
-- **Libraries:** 
-  - `pandas` - จัดการข้อมูล Excel
-  - `openpyxl` - อ่านไฟล์ .xlsx
-  - `xlrd` - อ่านไฟล์ .xls (Excel 97-2003)
-  - `msal` - Microsoft Authentication Library
+ระบบเพียงแต่อ่านไฟล์ที่ขึ้นต้นด้วย `Payment_Detail_Report`
 
 ---
 
-## 🔍 คุณสมบัติของระบบ
-
-### ระบบค้นหา:
-- ✅ ค้นหาด้วยเลข Invoice (จับจาก "รายละเอียดของรายการ")
-- ✅ รองรับ Invoice ที่มีรูปแบบหลากหลาย (ไม่จำกัดรูปแบบ)
-- ✅ แสดงเฉพาะ 7 คอลัมน์ที่สำคัญ:
-  - วันที่รายการมีผล
-  - บัญชีผู้รับเงิน
-  - ชื่อผู้รับเงิน
-  - ธนาคาร
-  - สาขาธนาคารผู้รับเงิน
-  - จำนวนเงิน
-  - รายละเอียดของรายการ
-
-### ระบบดึงข้อมูล:
-- ✅ อ่าน**ทุกไฟล์**ที่ชื่อขึ้นต้นด้วย `Payment_Detail_Report` อัตโนมัติ
-- ✅ รองรับทั้งไฟล์ .xlsx และ .xls
-- ✅ รวมข้อมูลจากหลายไฟล์เป็นชุดข้อมูลเดียว
-- ✅ แสดง logs การอ่านไฟล์ที่ `/debug/data` endpoint
-
----
-
-## 👤 ติดต่อผู้ดูแล
-
-สำหรับปัญหาเกี่ยวกับการตั้งค่า Azure, SharePoint หรือ Credentials ติดต่อ:
-- สุรพันธุ์ พลรัมย์ สำนักงานวิทยทรัพยากร จุฬาลงกรณ์มหาวิทยาลัย
-
----
-
-**Version:** 1.0  
-**Last Updated:** 19 February 2026
+**Version:** 2.0  
+**Last Updated:** February 23, 2026  
+**Status:** ✅ Production Ready
