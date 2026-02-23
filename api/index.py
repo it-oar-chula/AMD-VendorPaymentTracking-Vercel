@@ -34,10 +34,10 @@ SHAREPOINT_HOST = os.getenv("SHAREPOINT_HOST", "carchula.sharepoint.com")
 SHAREPOINT_FOLDER = os.getenv("SHAREPOINT_FOLDER", "Test Vendor")
 
 # --- API Authentication (Bearer Token) ---
-# ควรจะเก็บไว้ใน environment variable เดียว แต่สำหรับ development เขียนแบบ fallback
-DEFAULT_API_KEY = os.getenv("API_KEY", "vendor-tracking-secret-key-12345")
-if DEFAULT_API_KEY == "vendor-tracking-secret-key-12345":
-    logger.warning("⚠️  WARNING: Using default API key. Set API_KEY environment variable in production!")
+# API_KEY จะต้องถูกตั้งค่าใน Environment Variables เสมอ (ทั้ง Local และ Production)
+DEFAULT_API_KEY = os.getenv("API_KEY")
+if not DEFAULT_API_KEY:
+    raise ValueError("❌ CRITICAL: API_KEY environment variable is not set! Cannot start the application.")
 
 # กำหนดคอลัมน์ที่สนใจ 7 คอลัมน์
 TARGET_COLUMNS = [
@@ -256,8 +256,8 @@ async def n8n_search_vendor(
     ค้นหาข้อมูล Invoice สำหรับ n8n - ต้องมี Bearer Token Authentication
     
     ตัวอย่าง:
-    GET /api/n8m/search?q=INV001234
-    Header: Authorization: Bearer vendor-tracking-secret-key-12345
+    GET /api/n8n/search?q=INV001234
+    Header: Authorization: Bearer API_KEY
     """
     try:
         df_main, logs = fetch_all_excel_data()
