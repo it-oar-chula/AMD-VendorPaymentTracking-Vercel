@@ -200,7 +200,7 @@ GET /api/search?q=INV001234
 
 ```
 GET /api/n8m/search?q=INV001234
-Authorization: Bearer vendor-tracking-secret-key-12345
+Authorization: Bearer <API_KEY from .env>
 ```
 
 **Purpose:** ใช้จาก n8m / External Systems
@@ -241,14 +241,14 @@ n8m → Add node → HTTP Request
 | **Method** | GET |
 | **URL** | `{{ $env.VENDOR_TRACKING_URL }}/api/n8m/search?q={{ $node["Previous Node"].json.invoice }}` |
 | **Authentication** | Header |
-| **Header** | `Authorization: Bearer {{ $env.API_KEY }}` |
+| **Header** | `Authorization: Bearer {{ $env.API_KEY }}`<br/>`// ต้องตรงกับค่า API_KEY ใน .env` |
 
 #### Step 3: ตั้ง Environment Variables ใน n8m
 
 ```
 VENDOR_TRACKING_URL = http://localhost:8000 (Local)
                     = https://vendor-tracking.vercel.app (Production)
-API_KEY = vendor-tracking-secret-key-12345
+API_KEY = <ค่าจาก .env ของคุณ>
 ```
 
 #### Step 4: Test
@@ -277,8 +277,10 @@ API_KEY = vendor-tracking-secret-key-12345
 ทุก request ไปยัง `/api/n8m/*` ต้องส่ง Header:
 
 ```
-Authorization: Bearer vendor-tracking-secret-key-12345
+Authorization: Bearer <API_KEY>
 ```
+
+**💡 ที่มา:** ค่า API_KEY มาจากไฟล์ `.env` ตัวอักษรต้องตรงกันเป๊ะ
 
 ### Error Response (ถ้า Auth ผิด)
 
@@ -325,7 +327,7 @@ pip install -r requirements.txt
 Authorization: Bearer wrong-key
 
 ✅ Solution:
-Authorization: Bearer vendor-tracking-secret-key-12345
+Authorization: Bearer <use value from .env>
 ```
 
 ---
