@@ -4,10 +4,14 @@ import msal
 import requests
 from fastapi import FastAPI, Query, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from urllib.parse import quote
 from dotenv import load_dotenv
 from typing import Optional
 import logging
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # ตั้งค่า Logging
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +20,25 @@ logger = logging.getLogger(__name__)
 # โหลดค่าจากไฟล์ .env
 load_dotenv()
 
+# ตั้งค่า Rate Limiter
+limiter = Limiter(key_func=get_remote_address, default_limits=["10/minute", "50/hour", "100/day"])
+
 app = FastAPI(title="Vendor Tracking API")
+app.state.limiter = limiter
+
+# Custom Rate Limit Error Handler - Block 30 minutes
+@app.exception_handler(RateLimitExceeded)
+async def custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    logger.warning(f"⚠️ Rate limit exceeded for IP: {get_remote_address(request)}")
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "Rate limit exceeded",
+            "message": "คุณได้ใช้งานเกินโควต้า กรุณารอ 30 นาทีแล้วลองใหม่อีกครั้ง",
+            "retry_after": 1800  # 30 minutes in seconds
+        },
+        headers={"Retry-After": "1800"}
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -190,13 +212,20 @@ async def health_check():
     }
 
 @app.get("/api/search")
-async def search_vendor(q: str = Query(..., description="คำค้นหา Invoice Number")):
+@limiter.limit("10/minute;50/hour;100/day")
+async def search_vendor(
+    request: Request,
+    q: str = Query(..., description="คำค้นหา Invoice Number")
+):
     """
-    ค้นหาข้อมูล Invoice - ใช้จากเว็บ Frontend
-    ไม่ต้องมี Authentication
+    ค้นหาข้อมูล Invoice - Frontend Endpoint (Public, Rate Limited)
+    
+    Rate Limit: 10 requests/minute, 50/hour, 100/day per IP
+    ถ้าเกินโค้วต้า จะถูก block 30 นาที
     
     ตัวอย่าง: GET /api/search?q=INV001234
     """
+    logger.info(f"🔍 Public search request from IP: {get_remote_address(request)} - Invoice: {q}")
     try:
         df_main, logs = fetch_all_excel_data()
         
@@ -248,17 +277,23 @@ async def search_vendor(q: str = Query(..., description="คำค้นหา I
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/n8n/search")
+@limiter.limit("100/minute;500/hour;1000/day")
 async def n8n_search_vendor(
+    request: Request,
     q: str = Query(..., description="Invoice Number"),
     _: bool = Depends(verify_api_key)
 ):
     """
-    ค้นหาข้อมูล Invoice สำหรับ n8n - ต้องมี Bearer Token Authentication
+    ค้นหาข้อมูl Invoice สำหรับ n8n/External API - ต้องมี Bearer Token
+    
+    Rate Limit: 100 requests/minute, 500/hour, 1000/day (สูงกว่า public)
+    Authentication: Bearer Token required
     
     ตัวอย่าง:
     GET /api/n8n/search?q=INV001234
-    Header: Authorization: Bearer API_KEY
+    Header: Authorization: Bearer <API_KEY>
     """
+    logger.info(f"🔐 Authenticated API request - Invoice: {q}")
     try:
         df_main, logs = fetch_all_excel_data()
         
