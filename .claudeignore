@@ -1,0 +1,42 @@
+# --- Python Specific ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.nox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# --- Database & Environment ---
+.env
+.venv
+*.db
+*.sqlite
+postgres_data/
+dump.sql
+
+# --- IDE & Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# --- Version Control ---
+.git/
+
+# --- Node/Frontend (ถ้ามี) ---
+node_modules/
+build/
+dist/

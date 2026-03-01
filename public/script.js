@@ -1,8 +1,20 @@
 // --- Configuration ---
 // เช็คอัตโนมัติ: ถ้ารันบน localhost ให้ชี้ไปที่ port 8000, ถ้า deploy แล้วใช้ /api
-const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
-    ? "http://localhost:8000/api" 
+const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? "http://localhost:8000/api"
     : "/api";
+
+// --- Security Helper ---
+// ป้องกัน XSS: escape HTML entities ก่อน inject ลง innerHTML เสมอ
+function esc(val, fallback = '-') {
+    const s = (val != null && val !== '' && val !== '-') ? String(val) : fallback;
+    return s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
 
 async function handleSearch() {
     const input = document.getElementById('searchInput').value.trim();
@@ -18,7 +30,7 @@ async function handleSearch() {
     try {
         // 2. เรียก API ไปยัง Backend (FastAPI) โดยระบุ /search (ต่อจาก API_BASE_URL)
         const response = await fetch(`${API_BASE_URL}/search?q=${encodeURIComponent(input)}`);
-        
+
         if (!response.ok) {
             throw new Error("ไม่สามารถเชื่อมต่อระบบได้");
         }
@@ -31,19 +43,19 @@ async function handleSearch() {
             resultArea.innerHTML = `
                 <article class="result-card" style="border-left-color: #dc3545; text-align: center;">
                     <h5 style="color: #dc3545; margin-bottom: 0.5rem;">❌ ไม่พบข้อมูล</h5>
-                    <p style="margin-bottom: 0.5rem;">ไม่พบรายการ "<strong>${input}</strong>" หรือรายการยังไม่ได้รับอนุมัติ</p>
+                    <p style="margin-bottom: 0.5rem;">ไม่พบรายการ "<strong>${esc(input)}</strong>" หรือรายการยังไม่ได้รับอนุมัติ</p>
                     <small style="color: #888;">โปรดตรวจสอบเลข Invoice อีกครั้ง (ต้องพิมพ์ตรงกับที่ระบุในเอกสารทุกตัวอักษร)</small>
                 </article>`;
             return;
         }
 
         // 4. กรณีพบข้อมูล: วนลูปสร้างการ์ด (Card)
-        resultArea.innerHTML = `<h6 style="margin-bottom: 1rem; color: #666;">พบทั้งหมด ${data.count} รายการ</h6>` + 
+        resultArea.innerHTML = `<h6 style="margin-bottom: 1rem; color: #666;">พบทั้งหมด ${Number(data.count)} รายการ</h6>` +
         data.results.map(item => {
             // กำหนดสีสถานะ (ใช้คอลัมน์ "สถานะรายการ" ตามไฟล์ CSV)
             let statusClass = 'status-default';
-            let statusText = item['สถานะรายการ'] || 'รอดำเนินการ'; 
-            
+            let statusText = item['สถานะรายการ'] || 'รอดำเนินการ';
+
             if (statusText.includes('สำเร็จ') || statusText.includes('จ่าย') || statusText.includes('โอน')) {
                 statusClass = 'status-success';
             } else if (statusText.includes('รอ') || statusText.includes('ค้าง')) {
@@ -55,27 +67,27 @@ async function handleSearch() {
             <div class="result-card" style="border-left-color: ${statusClass === 'status-success' ? '#28a745' : '#ffc107'};">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
                     <div>
-                        <small style="color: #888;">Invoice: ${item['Invoice_Number'] || '-'}</small>
-                        <h5 style="margin: 0; font-weight: bold; color: #333;">${item['ชื่อผู้รับเงิน'] || 'ไม่ระบุชื่อ'}</h5>
+                        <small style="color: #888;">Invoice: ${esc(item['Invoice_Number'])}</small>
+                        <h5 style="margin: 0; font-weight: bold; color: #333;">${esc(item['ชื่อผู้รับเงิน'], 'ไม่ระบุชื่อ')}</h5>
                     </div>
                     <span class="status-pill ${statusClass}">
-                        ${statusText}
+                        ${esc(statusText)}
                     </span>
                 </div>
-                
+
                 <hr style="margin: 0.5rem 0; border-color: #eee;">
-                
+
                 <div class="grid">
                     <div>
                         <small style="color: #666;">รายละเอียด</small><br>
-                        <em style="color: #555;">${item['รายละเอียดของรายการ'] || '-'}</em><br><br>
-                        
+                        <em style="color: #555;">${esc(item['รายละเอียดของรายการ'])}</em><br><br>
+
                         <small style="color: #666;">ข้อมูลการโอนเงิน</small><br>
-                        <small>ธนาคาร: <strong>${item['ธนาคาร'] || '-'}</strong> สาขา: ${item['สาขาธนาคารผู้รับเงิน'] || '-'}</small><br>
-                        <small>เลขบัญชี: <strong>${item['บัญชีผู้รับเงิน'] || '-'}</strong></small><br><br>
-                        
+                        <small>ธนาคาร: <strong>${esc(item['ธนาคาร'])}</strong> สาขา: ${esc(item['สาขาธนาคารผู้รับเงิน'])}</small><br>
+                        <small>เลขบัญชี: <strong>${esc(item['บัญชีผู้รับเงิน'])}</strong></small><br><br>
+
                         <div style="padding: 8px 12px; background: #e8f5e9; border-radius: 6px; border-left: 4px solid #4caf50; display: inline-block;">
-                            <small style="color: #2e7d32; font-weight: bold;">📅 วันที่รายการมีผล: <span style="font-size: 1.1em;">${item['วันที่รายการมีผล'] || '-'}</span></small>
+                            <small style="color: #2e7d32; font-weight: bold;">📅 วันที่รายการมีผล: <span style="font-size: 1.1em;">${esc(item['วันที่รายการมีผล'])}</span></small>
                         </div>
                     </div>
                     <div style="text-align: right;">
@@ -92,7 +104,7 @@ async function handleSearch() {
         console.error("Error:", error);
         resultArea.innerHTML = `
             <article class="result-card" style="border-left-color: #dc3545; background-color: #fff5f5;">
-                <strong>⚠️ เกิดข้อผิดพลาด:</strong> ไม่สามารถดึงข้อมูลได้ในขณะนี้ (${error.message})
+                <strong>⚠️ เกิดข้อผิดพลาด:</strong> ไม่สามารถดึงข้อมูลได้ในขณะนี้ (${esc(error.message)})
             </article>`;
     }
 }

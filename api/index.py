@@ -1,4 +1,5 @@
 import os
+import time
 import pandas as pd
 import msal
 import requests
@@ -40,11 +41,12 @@ async def custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):
         headers={"Retry-After": "1800"}
     )
 
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET"],
+    allow_headers=["Authorization"],
 )
 
 # --- Configuration ---
@@ -54,6 +56,12 @@ CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 SHAREPOINT_SITE_NAME = os.getenv("SHAREPOINT_SITE_NAME")
 SHAREPOINT_HOST = os.getenv("SHAREPOINT_HOST", "carchula.sharepoint.com")
 SHAREPOINT_FOLDER = os.getenv("SHAREPOINT_FOLDER", "Test Vendor")
+
+# --- In-Memory Cache ---
+# Vercel reuses warm instances → cache ทำงานได้จริงใน production
+# ตั้งค่า TTL ผ่าน env var CACHE_TTL_SECONDS (default 5 นาที)
+CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "300"))
+_cache: dict = {"df": None, "timestamp": 0.0}
 
 # --- API Authentication (Bearer Token) ---
 # API_KEY จะต้องถูกตั้งค่าใน Environment Variables เสมอ (ทั้ง Local และ Production)
@@ -107,7 +115,13 @@ def get_access_token():
     return result.get("access_token")
 
 def fetch_all_excel_data():
-    """ดึงข้อมูลจากทุกไฟล์ Excel บน SharePoint"""
+    """ดึงข้อมูลจากทุกไฟล์ Excel บน SharePoint (มี in-memory cache)"""
+    # ถ้า cache ยังไม่หมดอายุ ให้ใช้ข้อมูลเดิมทันที
+    if _cache["df"] is not None and (time.time() - _cache["timestamp"]) < CACHE_TTL:
+        logger.info(f"⚡ Cache hit — using cached data ({len(_cache['df'])} rows, TTL {CACHE_TTL}s)")
+        return _cache["df"], []
+
+    logger.info("🔄 Cache miss — fetching from SharePoint")
     logs = []
     token = get_access_token()
     if not token:
@@ -183,8 +197,31 @@ def fetch_all_excel_data():
     
     if before_count > after_count:
         logs.append(f"ℹ️ ลบข้อมูลซ้ำ: {before_count - after_count} รายการ")
-    
+
+    # บันทึกลง cache
+    _cache["df"] = combined_df
+    _cache["timestamp"] = time.time()
+    logger.info(f"✅ Cache updated — {len(combined_df)} rows, TTL {CACHE_TTL}s")
+
     return combined_df, logs
+
+def mask_account_number(account: str) -> str:
+    """
+    Mask เลขบัญชีธนาคาร โดยแสดงเฉพาะ 4 ตัวเลขสุดท้าย
+    ตัวอย่าง: "123-4-56789-0" -> "xxx-x-xxxxx-89-0" ... หรือรูปแบบไทย
+    รูปแบบจริง: แสดง 4 หลักสุดท้าย, แทนหลักที่เหลือด้วย x
+    ตัวอย่าง: "1234567890" -> "xxxxxx7890"
+              "123-4-56789-0" -> "xxx-x-xxxxx-9-0"  (4 ตัวเลขสุดท้าย = 9 กับ 0)
+    """
+    if not account or account == '-':
+        return account
+    digits = [i for i, c in enumerate(account) if c.isdigit()]
+    if len(digits) <= 4:
+        return account
+    # แทนทุก digit ยกเว้น 4 ตัวสุดท้าย ด้วย 'x'
+    mask_positions = set(digits[:-4])
+    return ''.join('x' if i in mask_positions else c for i, c in enumerate(account))
+
 
 # --- API Endpoints ---
 
@@ -227,50 +264,36 @@ async def search_vendor(
     """
     logger.info(f"🔍 Public search request from IP: {get_remote_address(request)} - Invoice: {q}")
     try:
-        df_main, logs = fetch_all_excel_data()
+        df_main, _ = fetch_all_excel_data()
         
         if df_main.empty:
-            return {
-                "count": 0,
-                "results": [],
-                "message": "ตารางข้อมูลว่างเปล่า",
-                "logs": logs
-            }
-            
+            return {"count": 0, "results": [], "message": "ตารางข้อมูลว่างเปล่า"}
+
         if 'รายละเอียดของรายการ' not in df_main.columns:
-             return {
-                 "count": 0,
-                 "results": [],
-                 "message": "ไม่พบคอลัมน์ที่ต้องการ",
-                 "logs": logs
-             }
+            return {"count": 0, "results": [], "message": "ไม่พบคอลัมน์ที่ต้องการ"}
 
         # สร้าง Invoice_Number column
         df_main['Invoice_Number'] = df_main['รายละเอียดของรายการ'].astype(str).str.strip().str.split().str[0]
-        
+
         query = q.strip().upper()
         result_df = df_main[df_main['Invoice_Number'].str.upper() == query].copy()
-        
+
         if result_df.empty:
-            return {
-                "count": 0,
-                "results": [],
-                "message": "ไม่พบข้อมูลรายการดังกล่าว",
-                "logs": logs
-            }
+            return {"count": 0, "results": [], "message": "ไม่พบข้อมูลรายการดังกล่าว"}
 
         # เลือกเฉพาะคอลัมน์ที่สนใจ
         valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
         final_data = result_df[valid_columns].copy()
         final_data['Invoice_Number'] = result_df['Invoice_Number']
-        
+
         records = final_data.fillna("-").to_dict(orient='records')
-        
-        return {
-            "count": len(records),
-            "results": records,
-            "logs": logs
-        }
+
+        # Mask เลขบัญชีก่อน return สู่ public endpoint
+        for record in records:
+            if 'บัญชีผู้รับเงิน' in record:
+                record['บัญชีผู้รับเงิน'] = mask_account_number(str(record['บัญชีผู้รับเงิน']))
+
+        return {"count": len(records), "results": records}
 
     except Exception as e:
         logger.error(f"Error in search: {e}", exc_info=True)
