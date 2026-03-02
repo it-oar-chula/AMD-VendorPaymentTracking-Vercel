@@ -445,6 +445,10 @@ async def n8n_search_vendor(
         
         records = final_data.fillna("-").to_dict(orient='records')
         
+        # ✅ Mask เลขบัญชี (เหมือน /api/search)
+        for record in records:
+            if 'บัญชีผู้รับเงิน' in record:
+                record['บัญชีผู้รับเงิน'] = mask_account_number(str(record['บัญชีผู้รับเงิน']))        
         logger.info(f"✅ n8n query for '{q}': Found {len(records)} record(s)")
         
         return {
