@@ -5,5 +5,5 @@ openpyxl
 xlrd
 msal
 requests
+httpx
 python-dotenv
-slowapi

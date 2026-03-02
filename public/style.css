@@ -20,6 +20,15 @@ body {
     background-color: var(--pico-background-color);
 }
 
+/* ม้านรับ Element สำหรับ Highlight */
+mark.highlight {
+    background-color: #ffeb3b;
+    color: #000;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-weight: bold;
+}
+
 /* ส่วนหัวเว็บไซต์ (Top Navigation) */
 .top-nav {
     background-color: white;

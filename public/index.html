@@ -13,6 +13,15 @@
     
     <!-- 3. โหลดไฟล์ CSS ของเราเอง -->
     <link rel="stylesheet" href="style.css">
+    <style>
+        /* สไตล์สำหรับคำที่ถูกไฮไลท์ (เตรียมไว้สำหรับฟีเจอร์ Highlight ในอนาคต) */
+        mark.highlight {
+            background-color: #fff3cd; /* สีเหลืองอ่อน สบายตา */
+            color: #856404;            /* สีตัวอักษรเข้มขึ้นเล็กน้อยให้อ่านง่าย */
+            padding: 0.1em 0.2em;
+            border-radius: 0.2em;
+        }
+    </style>
 </head>
 <body>
 
@@ -33,12 +42,15 @@
         <section class="search-section">
             <h4 style="margin-bottom: 1rem;">🔍 ค้นหาสถานะการจ่ายเงิน</h4>
             <form onsubmit="event.preventDefault(); handleSearch();">
-                <label for="searchInput">ระบุเลข Invoice</label>
+                <!-- <label for="searchInput">ระบุเลข Invoice</label> -->
+                <label for="searchInput">คำค้นหา (Keyword)</label>
                 <div role="group">
-                    <input type="search" id="searchInput" placeholder="กรอกข้อมูลเพื่อค้นหา..." required>
+                    <!-- <input type="search" id="searchInput" placeholder="กรอกข้อมูลเพื่อค้นหา..." required> -->
+                    <input type="search" id="searchInput" placeholder="ระบุเลข Invoice, ชื่อบริษัท, หรือยอดเงิน..." required>
                     <button type="submit">ค้นหา</button>
                 </div>
-                <small style="color: #888;">* ระบุเลข Invoice ที่ต้องการค้นหา (ต้องพิมพ์ให้ตรงกับเอกสารทุกตัวอักษร)</small>
+                <!-- <small style="color: #888;">* ระบุเลข Invoice ที่ต้องการค้นหา (ต้องพิมพ์ให้ตรงกับเอกสารทุกตัวอักษร)</small> -->
+                <small style="color: #888;">* สามารถค้นหาด้วย เลข Invoice, ชื่อผู้รับเงิน, หรือยอดเงิน (พิมพ์บางส่วนได้)</small>
             </form>
         </section>
 

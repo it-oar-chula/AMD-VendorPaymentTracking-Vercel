@@ -1,18 +1,17 @@
 import os
 import time
+import io
+import secrets
 import pandas as pd
 import msal
-import requests
+import httpx
 from fastapi import FastAPI, Query, HTTPException, Request, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from urllib.parse import quote
 from dotenv import load_dotenv
 from typing import Optional
 import logging
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
+from fastapi.concurrency import run_in_threadpool
 
 # ตั้งค่า Logging
 logging.basicConfig(level=logging.INFO)
@@ -21,25 +20,11 @@ logger = logging.getLogger(__name__)
 # โหลดค่าจากไฟล์ .env
 load_dotenv()
 
-# ตั้งค่า Rate Limiter
-limiter = Limiter(key_func=get_remote_address, default_limits=["10/minute", "50/hour", "100/day"])
+class SharePointConfigError(Exception):
+    """ข้อผิดพลาดจาก configuration (โฟลเดอร์ว่าง, ไม่พบไฟล์) — ไม่ใช่ SharePoint ล่ม"""
+    pass
 
 app = FastAPI(title="Vendor Tracking API")
-app.state.limiter = limiter
-
-# Custom Rate Limit Error Handler - Block 30 minutes
-@app.exception_handler(RateLimitExceeded)
-async def custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    logger.warning(f"⚠️ Rate limit exceeded for IP: {get_remote_address(request)}")
-    return JSONResponse(
-        status_code=429,
-        content={
-            "error": "Rate limit exceeded",
-            "message": "คุณได้ใช้งานเกินโควต้า กรุณารอ 30 นาทีแล้วลองใหม่อีกครั้ง",
-            "retry_after": 1800  # 30 minutes in seconds
-        },
-        headers={"Retry-After": "1800"}
-    )
 
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")]
 app.add_middleware(
@@ -62,6 +47,11 @@ SHAREPOINT_FOLDER = os.getenv("SHAREPOINT_FOLDER", "Test Vendor")
 # ตั้งค่า TTL ผ่าน env var CACHE_TTL_SECONDS (default 5 นาที)
 CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "300"))
 _cache: dict = {"df": None, "timestamp": 0.0}
+
+# --- SharePoint Status Tracking (Fail Fast Strategy) ---
+# ถ้า SharePoint โดนบล็อค → API จะ return 503 ทันที แทนที่จะรอ timeout
+SHAREPOINT_DOWN = False
+SHAREPOINT_DOWN_TIME = 0.0
 
 # --- API Authentication (Bearer Token) ---
 # API_KEY จะต้องถูกตั้งค่าใน Environment Variables เสมอ (ทั้ง Local และ Production)
@@ -99,111 +89,204 @@ async def verify_api_key(authorization: Optional[str] = Header(None)) -> bool:
         raise HTTPException(status_code=401, detail="Invalid Authorization format. Use: Bearer <token>")
     
     token = parts[1]
-    if token != DEFAULT_API_KEY:
-        logger.warning(f"❌ Invalid API key attempt: {token[:10]}...")
+    # ใช้ secrets.compare_digest เพื่อป้องกัน Timing Attack
+    if not secrets.compare_digest(token, DEFAULT_API_KEY):
+        logger.warning("❌ Invalid API key attempt detected")
         raise HTTPException(status_code=401, detail="Invalid API key")
     
     return True
 
-def get_access_token():
-    """ขอ Access Token จาก Azure AD"""
-    authority = f"https://login.microsoftonline.com/{TENANT_ID}"
-    client_app = msal.ConfidentialClientApplication(
-        CLIENT_ID, authority=authority, client_credential=CLIENT_SECRET
+# MSAL Client Singleton — เก็บไว้ระดับ module เพื่อให้ MSAL token cache ทำงานได้
+# บน Vercel warm instance: module-level variable จะถูก reuse → MSAL cache token ~1 ชั่วโมง
+# แทนที่จะ round-trip Azure AD ทุก cache miss (ทุก 5 นาที)
+_msal_app: Optional[msal.ConfidentialClientApplication] = None
+
+def _get_msal_app() -> msal.ConfidentialClientApplication:
+    global _msal_app
+    if _msal_app is None:
+        authority = f"https://login.microsoftonline.com/{TENANT_ID}"
+        _msal_app = msal.ConfidentialClientApplication(
+            CLIENT_ID, authority=authority, client_credential=CLIENT_SECRET
+        )
+    return _msal_app
+
+async def get_access_token():
+    """ขอ Access Token จาก Azure AD (ใช้ MSAL internal token cache)"""
+    result = await run_in_threadpool(
+        _get_msal_app().acquire_token_for_client,
+        scopes=["https://graph.microsoft.com/.default"]
     )
-    result = client_app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
     return result.get("access_token")
 
-def fetch_all_excel_data():
-    """ดึงข้อมูลจากทุกไฟล์ Excel บน SharePoint (มี in-memory cache)"""
+async def fetch_all_excel_data():
+    """ดึงข้อมูลจากทุกไฟล์ Excel บน SharePoint (มี in-memory cache + Fail Fast)"""
+    global SHAREPOINT_DOWN, SHAREPOINT_DOWN_TIME
+    
+    # ❌ ถ้า SharePoint ล่ม → return error ทันที (ไม่เรียก SharePoint)
+    if SHAREPOINT_DOWN and (time.time() - SHAREPOINT_DOWN_TIME) < 300:  # 5 นาที
+        age = int(time.time() - SHAREPOINT_DOWN_TIME)
+        logger.warning(f"⚠️ SharePoint still down (down for {age}s) - failing fast")
+        raise Exception(f"SharePoint temporarily unavailable (down for {age}s)")
+    
+    # ✅ Reset status ถ้า recovery time ผ่านไป
+    if SHAREPOINT_DOWN and (time.time() - SHAREPOINT_DOWN_TIME) >= 300:
+        logger.info("ℹ️ Attempting to recover connection to SharePoint")
+        SHAREPOINT_DOWN = False
+    
     # ถ้า cache ยังไม่หมดอายุ ให้ใช้ข้อมูลเดิมทันที
     if _cache["df"] is not None and (time.time() - _cache["timestamp"]) < CACHE_TTL:
         logger.info(f"⚡ Cache hit — using cached data ({len(_cache['df'])} rows, TTL {CACHE_TTL}s)")
+        SHAREPOINT_DOWN = False  # Reset status on cache hit
         return _cache["df"], []
 
     logger.info("🔄 Cache miss — fetching from SharePoint")
     logs = []
-    token = get_access_token()
+    token = await get_access_token()
     if not token:
-        return pd.DataFrame(), ["❌ ไม่สามารถขอ Access Token จาก Azure ได้"]
+        logger.error("❌ Failed to get access token")
+        SHAREPOINT_DOWN = True
+        SHAREPOINT_DOWN_TIME = time.time()
+        raise Exception("Failed to get Azure AD access token")
     
     headers = {'Authorization': f'Bearer {token}'}
     
-    # รับ Site ID
-    site_url = f"https://graph.microsoft.com/v1.0/sites/{SHAREPOINT_HOST}:/sites/{SHAREPOINT_SITE_NAME}"
-    site_res = requests.get(site_url, headers=headers).json()
-    site_id = site_res.get('id')
-    if not site_id:
-        return pd.DataFrame(), [f"❌ หา Site ID ไม่เจอ"]
-
-    # รับไฟล์ในโฟลเดอร์
-    folder_path = f"{SHAREPOINT_FOLDER}".strip("/")
-    encoded_folder = quote(folder_path)
-    list_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{encoded_folder}:/children"
-    list_res = requests.get(list_url, headers=headers).json()
-    
-    files = list_res.get('value', [])
-    if not files:
-        return pd.DataFrame(), ["❌ ไม่พบไฟล์ใดๆ ใน Folder SharePoint นี้"]
-
-    all_dataframes = []
-
-    for file_item in files:
-        file_name = file_item.get('name', '')
-        
-        # อ่านเฉพาะไฟล์ที่ขึ้นต้นด้วย "Payment_Detail_Report"
-        if file_name.startswith('Payment_Detail_Report'):
-            download_url = file_item.get('@microsoft.graph.downloadUrl')
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # รับ Site ID
+            site_url = f"https://graph.microsoft.com/v1.0/sites/{SHAREPOINT_HOST}:/sites/{SHAREPOINT_SITE_NAME}"
+            site_res = (await client.get(site_url, headers=headers)).json()
             
-            if download_url:
+            # ❌ ตรวจสอบ error response (429 Too Many Requests, 503 Service Unavailable)
+            if 'error' in site_res:
+                error_code = site_res['error'].get('code', 'UNKNOWN')
+                error_msg = site_res['error'].get('message', '')
+                logger.error(f"🔴 SharePoint API error: {error_code} - {error_msg}")
+                
+                if error_code in ['throttlingException', 'serviceNotAvailable', 'generalException']:
+                    SHAREPOINT_DOWN = True
+                    SHAREPOINT_DOWN_TIME = time.time()
+                    raise Exception(f"SharePoint {error_code}: {error_msg}")
+            
+            site_id = site_res.get('id')
+            if not site_id:
+                logger.error("❌ Cannot find SharePoint Site ID")
+                SHAREPOINT_DOWN = True
+                SHAREPOINT_DOWN_TIME = time.time()
+                raise Exception("Cannot find SharePoint Site ID")
+
+            # รับไฟล์ในโฟลเดอร์
+            folder_path = f"{SHAREPOINT_FOLDER}".strip("/")
+            encoded_folder = quote(folder_path)
+            list_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{encoded_folder}:/children"
+            list_res = (await client.get(list_url, headers=headers)).json()
+            
+            # ❌ ตรวจสอบ error response
+            if 'error' in list_res:
+                error_code = list_res['error'].get('code', 'UNKNOWN')
+                error_msg = list_res['error'].get('message', '')
+                logger.error(f"🔴 SharePoint API error: {error_code} - {error_msg}")
+                
+                if error_code in ['throttlingException', 'serviceNotAvailable', 'generalException']:
+                    SHAREPOINT_DOWN = True
+                    SHAREPOINT_DOWN_TIME = time.time()
+                    raise Exception(f"SharePoint {error_code}: {error_msg}")
+            
+            files = list_res.get('value', [])
+            if not files:
+                logs.append("❌ ไม่พบไฟล์ใดๆ ใน Folder SharePoint นี้")
+                raise SharePointConfigError("No files found in SharePoint folder")
+
+            all_dataframes = []
+
+            for file_item in files:
+                file_name = file_item.get('name', '')
+
+                # อ่านเฉพาะไฟล์ที่ขึ้นต้นด้วย "Payment_Detail_Report"
+                if not file_name.startswith('Payment_Detail_Report'):
+                    continue
+
+                download_url = file_item.get('@microsoft.graph.downloadUrl')
+                if not download_url:
+                    continue
+
+                # Step 1: Download (async network I/O — แยกออกมาเพื่อป้องกัน NameError)
                 try:
-                    # ตรวจสอบนามสกุลไฟล์
+                    response = await client.get(download_url)
+                    response.raise_for_status()
+                    file_content = io.BytesIO(response.content)
+                except httpx.HTTPStatusError as e:
+                    # 🛑 ถ้าโดนแบน (429) หรือระบบล่ม (503) ให้หยุดทันที เพื่อเข้าสู่โหมด Fail Fast
+                    if e.response.status_code in [429, 503]:
+                        raise e
+                    # Error อื่นๆ (เช่น 404) ให้ข้ามไฟล์นี้ไป
+                    logs.append(f"❌ ล้มเหลว (HTTP {e.response.status_code}): {file_name}")
+                    continue
+                except Exception:
+                    logs.append(f"❌ ล้มเหลว (download): {file_name}")
+                    continue
+
+                # Step 2: Parse (blocking CPU/I/O → threadpool)
+                try:
                     if file_name.endswith('.xlsx'):
-                        df = pd.read_excel(download_url, engine='openpyxl', dtype=str)
-                        all_dataframes.append(df)
-                        logs.append(f"✅ สำเร็จ (Excel .xlsx): {file_name} ({len(df)} แถว)")
+                        df = await run_in_threadpool(pd.read_excel, file_content, engine='openpyxl', dtype=str)
                     elif file_name.endswith('.xls'):
-                        df = pd.read_excel(download_url, engine='xlrd', dtype=str)
-                        all_dataframes.append(df)
-                        logs.append(f"✅ สำเร็จ (Excel .xls): {file_name} ({len(df)} แถว)")
+                        df = await run_in_threadpool(pd.read_excel, file_content, engine='xlrd', dtype=str)
                     else:
-                        df = pd.read_excel(download_url, dtype=str)
-                        all_dataframes.append(df)
-                        logs.append(f"✅ สำเร็จ (Excel): {file_name} ({len(df)} แถว)")
-                except Exception as e1:
-                    try:
-                        df = pd.read_csv(download_url, dtype=str, encoding='utf-8-sig')
-                        all_dataframes.append(df)
-                        logs.append(f"✅ สำเร็จ (CSV UTF-8): {file_name} ({len(df)} แถว)")
-                    except Exception as e2:
+                        df = await run_in_threadpool(pd.read_excel, file_content, dtype=str)
+                    all_dataframes.append(df)
+                    logs.append(f"✅ สำเร็จ: {file_name} ({len(df)} แถว)")
+                except Exception:
+                    # Excel ล้มเหลว → ลอง CSV encodings (utf-8-sig, cp874)
+                    for encoding in ('utf-8-sig', 'cp874'):
                         try:
-                            df = pd.read_csv(download_url, dtype=str, encoding='cp874')
+                            file_content.seek(0)
+                            df = await run_in_threadpool(pd.read_csv, file_content, dtype=str, encoding=encoding)
                             all_dataframes.append(df)
-                            logs.append(f"✅ สำเร็จ (CSV ภาษาไทย): {file_name} ({len(df)} แถว)")
-                        except Exception as e3:
-                            logs.append(f"❌ ล้มเหลว: {file_name}")
+                            logs.append(f"✅ สำเร็จ (CSV {encoding}): {file_name} ({len(df)} แถว)")
+                            break
+                        except Exception:
+                            continue
+                    else:
+                        logs.append(f"❌ ล้มเหลว: {file_name}")
 
-    if not all_dataframes:
-         return pd.DataFrame(), logs + ["❌ ไม่พบไฟล์ที่สามารถอ่านข้อมูลได้"]
-    
-    # รวมข้อมูลจากทุกไฟล์
-    combined_df = pd.concat(all_dataframes, ignore_index=True)
-    combined_df.columns = combined_df.columns.astype(str).str.strip()
-    
-    # ลบข้อมูลซ้ำ
-    before_count = len(combined_df)
-    combined_df = combined_df.drop_duplicates()
-    after_count = len(combined_df)
-    
-    if before_count > after_count:
-        logs.append(f"ℹ️ ลบข้อมูลซ้ำ: {before_count - after_count} รายการ")
+            if not all_dataframes:
+                logs.append("❌ ไม่พบไฟล์ที่สามารถอ่านข้อมูลได้")
+                raise SharePointConfigError("No matching files could be parsed")
 
-    # บันทึกลง cache
-    _cache["df"] = combined_df
-    _cache["timestamp"] = time.time()
-    logger.info(f"✅ Cache updated — {len(combined_df)} rows, TTL {CACHE_TTL}s")
+            # รวมข้อมูลจากทุกไฟล์ (blocking → threadpool)
+            combined_df = await run_in_threadpool(pd.concat, all_dataframes, ignore_index=True)
+            combined_df.columns = combined_df.columns.astype(str).str.strip()
 
-    return combined_df, logs
+            # --- Data Transformation (ย้ายมาทำตรงนี้ครั้งเดียว) ---
+            if 'รายละเอียดของรายการ' in combined_df.columns:
+                # สร้าง Invoice_Number
+                combined_df['Invoice_Number'] = combined_df['รายละเอียดของรายการ'].astype(str).str.strip().str.split().str[0]
+                # สร้างตัวช่วยค้นหา (Upper Case)
+                combined_df['Invoice_Number_Upper'] = combined_df['Invoice_Number'].str.upper()
+            
+            # ลบข้อมูลซ้ำ (blocking → threadpool)
+            before_count = len(combined_df)
+            combined_df = await run_in_threadpool(combined_df.drop_duplicates)
+            after_count = len(combined_df)
+            
+            if before_count > after_count:
+                logs.append(f"ℹ️ ลบข้อมูลซ้ำ: {before_count - after_count} รายการ")
+
+            # ✅ สำเร็จ → บันทึกลง cache + reset status
+            _cache["df"] = combined_df
+            _cache["timestamp"] = time.time()
+            SHAREPOINT_DOWN = False  # ✅ Reset status on success
+            logger.info(f"✅ Cache updated — {len(combined_df)} rows, TTL {CACHE_TTL}s")
+
+            return combined_df, logs
+    
+    except SharePointConfigError:
+        raise  # Config errors ไม่ใช่ SharePoint ล่ม — ไม่ตั้ง SHAREPOINT_DOWN
+    except Exception as e:
+        logger.error(f"❌ SharePoint error: {e}", exc_info=True)
+        SHAREPOINT_DOWN = True
+        SHAREPOINT_DOWN_TIME = time.time()
+        raise
 
 def mask_account_number(account: str) -> str:
     """
@@ -213,14 +296,15 @@ def mask_account_number(account: str) -> str:
     ตัวอย่าง: "1234567890" -> "xxxxxx7890"
               "123-4-56789-0" -> "xxx-x-xxxxx-9-0"  (4 ตัวเลขสุดท้าย = 9 กับ 0)
     """
-    if not account or account == '-':
-        return account
-    digits = [i for i, c in enumerate(account) if c.isdigit()]
+    acc_str = str(account)
+    if not acc_str or acc_str == '-':
+        return acc_str
+    digits = [i for i, c in enumerate(acc_str) if c.isdigit()]
     if len(digits) <= 4:
-        return account
+        return acc_str
     # แทนทุก digit ยกเว้น 4 ตัวสุดท้าย ด้วย 'x'
     mask_positions = set(digits[:-4])
-    return ''.join('x' if i in mask_positions else c for i, c in enumerate(account))
+    return ''.join('x' if i in mask_positions else c for i, c in enumerate(acc_str))
 
 
 # --- API Endpoints ---
@@ -249,34 +333,34 @@ async def health_check():
     }
 
 @app.get("/api/search")
-@limiter.limit("10/minute;50/hour;100/day")
 async def search_vendor(
     request: Request,
     q: str = Query(..., description="คำค้นหา Invoice Number")
 ):
     """
-    ค้นหาข้อมูล Invoice - Frontend Endpoint (Public, Rate Limited)
-    
-    Rate Limit: 10 requests/minute, 50/hour, 100/day per IP
-    ถ้าเกินโค้วต้า จะถูก block 30 นาที
+    ค้นหาข้อมูล Invoice - Frontend Endpoint (Public)
     
     ตัวอย่าง: GET /api/search?q=INV001234
     """
-    logger.info(f"🔍 Public search request from IP: {get_remote_address(request)} - Invoice: {q}")
+    logger.info(f"🔍 Public search request - Invoice: {q}")
     try:
-        df_main, _ = fetch_all_excel_data()
+        df_main, _ = await fetch_all_excel_data()
         
         if df_main.empty:
             return {"count": 0, "results": [], "message": "ตารางข้อมูลว่างเปล่า"}
 
-        if 'รายละเอียดของรายการ' not in df_main.columns:
-            return {"count": 0, "results": [], "message": "ไม่พบคอลัมน์ที่ต้องการ"}
+        if 'Invoice_Number_Upper' not in df_main.columns:
+             return {"count": 0, "results": [], "message": "ไม่พบคอลัมน์ Invoice Number"}
 
-        # สร้าง Invoice_Number column
-        df_main['Invoice_Number'] = df_main['รายละเอียดของรายการ'].astype(str).str.strip().str.split().str[0]
+        query = q.strip()
 
-        query = q.strip().upper()
-        result_df = df_main[df_main['Invoice_Number'].str.upper() == query].copy()
+        # --- [OPTION 1] ค้นหาด้วย Invoice Number อย่างเดียว (Exact Match) ---
+        # result_df = df_main[df_main['Invoice_Number_Upper'] == query.upper()].copy()
+
+        # --- [OPTION 2] Single Search: ค้นหาบางส่วนในทุกคอลัมน์ (Partial Match) ---
+        search_cols = [c for c in TARGET_COLUMNS if c in df_main.columns] + ['Invoice_Number']
+        mask = df_main[search_cols].apply(lambda x: x.astype(str).str.contains(query, case=False, na=False)).any(axis=1)
+        result_df = df_main[mask].copy()
 
         if result_df.empty:
             return {"count": 0, "results": [], "message": "ไม่พบข้อมูลรายการดังกล่าว"}
@@ -295,12 +379,14 @@ async def search_vendor(
 
         return {"count": len(records), "results": records}
 
+    except SharePointConfigError as e:
+        logger.error(f"Config error in search: {e}")
+        raise HTTPException(status_code=500, detail="Data configuration error")
     except Exception as e:
         logger.error(f"Error in search: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
 @app.get("/api/n8n/search")
-@limiter.limit("100/minute;500/hour;1000/day")
 async def n8n_search_vendor(
     request: Request,
     q: str = Query(..., description="Invoice Number"),
@@ -309,7 +395,6 @@ async def n8n_search_vendor(
     """
     ค้นหาข้อมูl Invoice สำหรับ n8n/External API - ต้องมี Bearer Token
     
-    Rate Limit: 100 requests/minute, 500/hour, 1000/day (สูงกว่า public)
     Authentication: Bearer Token required
     
     ตัวอย่าง:
@@ -318,7 +403,7 @@ async def n8n_search_vendor(
     """
     logger.info(f"🔐 Authenticated API request - Invoice: {q}")
     try:
-        df_main, logs = fetch_all_excel_data()
+        df_main, logs = await fetch_all_excel_data()
         
         if df_main.empty:
             return {
@@ -326,19 +411,19 @@ async def n8n_search_vendor(
                 "message": "ไม่สามารถดึงข้อมูลจาก SharePoint ได้",
                 "data": None
             }
-            
-        if 'รายละเอียดของรายการ' not in df_main.columns:
-             return {
-                 "success": False,
-                 "message": "ไม่พบคอลัมน์ 'รายละเอียดของรายการ'",
-                 "data": None
-             }
 
-        # สร้าง Invoice_Number
-        df_main['Invoice_Number'] = df_main['รายละเอียดของรายการ'].astype(str).str.strip().str.split().str[0]
+        if 'Invoice_Number_Upper' not in df_main.columns:
+             return {"success": False, "message": "Data structure error: Missing Invoice column", "data": None}
         
-        query = q.strip().upper()
-        result_df = df_main[df_main['Invoice_Number'].str.upper() == query].copy()
+        query = q.strip()
+
+        # --- [OPTION 1] ค้นหาด้วย Invoice Number อย่างเดียว (Exact Match) ---
+        # result_df = df_main[df_main['Invoice_Number_Upper'] == query.upper()].copy()
+
+        # --- [OPTION 2] Single Search: ค้นหาบางส่วนในทุกคอลัมน์ (Partial Match) ---
+        search_cols = [c for c in TARGET_COLUMNS if c in df_main.columns] + ['Invoice_Number']
+        mask = df_main[search_cols].apply(lambda x: x.astype(str).str.contains(query, case=False, na=False)).any(axis=1)
+        result_df = df_main[mask].copy()
         
         if result_df.empty:
             return {
@@ -364,15 +449,12 @@ async def n8n_search_vendor(
         }
 
     except HTTPException as e:
-        # Re-raise HTTP exceptions (authentication errors)
         raise e
+    except SharePointConfigError as e:
+        return {"success": False, "message": f"Data configuration error: {str(e)}", "data": None}
     except Exception as e:
-        logger.error(f"Error in n8m search: {e}", exc_info=True)
-        return {
-            "success": False,
-            "message": f"Error: {str(e)}",
-            "data": None
-        }
+        logger.error(f"Error in n8n search: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
 if __name__ == "__main__":
     import uvicorn

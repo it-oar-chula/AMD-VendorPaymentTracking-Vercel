@@ -16,6 +16,21 @@ function esc(val, fallback = '-') {
         .replace(/'/g, '&#39;');
 }
 
+// ✅ Highlight function (รับ escaped text)
+function highlight(text, term) {
+    if (!term || !text) return text;
+    // Escape regex special characters
+    const pattern = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(${pattern})`, 'gi');
+    return text.replace(regex, '<mark class="highlight">$1</mark>');
+}
+
+// ✅ Highlight with Escape (escape + highlight combined)
+function highlightEsc(val, term, fallback = '-') {
+    const escaped = esc(val, fallback);
+    return highlight(escaped, term);
+}
+
 async function handleSearch() {
     const input = document.getElementById('searchInput').value.trim();
     const resultArea = document.getElementById('result-area');
@@ -67,11 +82,11 @@ async function handleSearch() {
             <div class="result-card" style="border-left-color: ${statusClass === 'status-success' ? '#28a745' : '#ffc107'};">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
                     <div>
-                        <small style="color: #888;">Invoice: ${esc(item['Invoice_Number'])}</small>
-                        <h5 style="margin: 0; font-weight: bold; color: #333;">${esc(item['ชื่อผู้รับเงิน'], 'ไม่ระบุชื่อ')}</h5>
+                        <small style="color: #888;">Invoice: ${highlightEsc(item['Invoice_Number'], input)}</small>
+                        <h5 style="margin: 0; font-weight: bold; color: #333;">${highlightEsc(item['ชื่อผู้รับเงิน'], input, 'ไม่ระบุชื่อ')}</h5>
                     </div>
                     <span class="status-pill ${statusClass}">
-                        ${esc(statusText)}
+                        ${highlightEsc(statusText, input)}
                     </span>
                 </div>
 
@@ -80,14 +95,14 @@ async function handleSearch() {
                 <div class="grid">
                     <div>
                         <small style="color: #666;">รายละเอียด</small><br>
-                        <em style="color: #555;">${esc(item['รายละเอียดของรายการ'])}</em><br><br>
+                        <em style="color: #555;">${highlightEsc(item['รายละเอียดของรายการ'], input)}</em><br><br>
 
                         <small style="color: #666;">ข้อมูลการโอนเงิน</small><br>
-                        <small>ธนาคาร: <strong>${esc(item['ธนาคาร'])}</strong> สาขา: ${esc(item['สาขาธนาคารผู้รับเงิน'])}</small><br>
-                        <small>เลขบัญชี: <strong>${esc(item['บัญชีผู้รับเงิน'])}</strong></small><br><br>
+                        <small>ธนาคาร: <strong>${highlightEsc(item['ธนาคาร'], input)}</strong> สาขา: ${highlightEsc(item['สาขาธนาคารผู้รับเงิน'], input)}</small><br>
+                        <small>เลขบัญชี: <strong>${highlightEsc(item['บัญชีผู้รับเงิน'], input)}</strong></small><br><br>
 
                         <div style="padding: 8px 12px; background: #e8f5e9; border-radius: 6px; border-left: 4px solid #4caf50; display: inline-block;">
-                            <small style="color: #2e7d32; font-weight: bold;">📅 วันที่รายการมีผล: <span style="font-size: 1.1em;">${esc(item['วันที่รายการมีผล'])}</span></small>
+                            <small style="color: #2e7d32; font-weight: bold;">📅 วันที่รายการมีผล: <span style="font-size: 1.1em;">${highlightEsc(item['วันที่รายการมีผล'], input)}</span></small>
                         </div>
                     </div>
                     <div style="text-align: right;">
