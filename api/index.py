@@ -71,6 +71,12 @@ TARGET_COLUMNS = [
     "สถานะรายการ" 
 ]
 
+# คอลัมน์ที่อนุญาตให้ค้นหาแบบ Global Search
+SEARCH_COLUMNS = [
+    "ชื่อผู้รับเงิน",
+    "รายละเอียดของรายการ",
+]
+
 # --- Dependency: Bearer Token Authentication ---
 async def verify_api_key(authorization: Optional[str] = Header(None)) -> bool:
     """
@@ -335,30 +341,30 @@ async def health_check():
 @app.get("/api/search")
 async def search_vendor(
     request: Request,
-    q: str = Query(..., description="คำค้นหา Invoice Number")
+    q: str = Query(..., description="คำค้นหา (ชื่อผู้รับเงิน หรือ รายละเอียดของรายการ)")
 ):
     """
-    ค้นหาข้อมูล Invoice - Frontend Endpoint (Public)
+    ค้นหาข้อมูลแบบ Global Search - Frontend Endpoint (Public)
     
-    ตัวอย่าง: GET /api/search?q=INV001234
+    ตัวอย่าง: GET /api/search?q=สมชาย
     """
-    logger.info(f"🔍 Public search request - Invoice: {q}")
+    logger.info(f"🔍 Public search request - Query: {q}")
     try:
         df_main, _ = await fetch_all_excel_data()
         
         if df_main.empty:
             return {"count": 0, "results": [], "message": "ตารางข้อมูลว่างเปล่า"}
 
-        if 'Invoice_Number_Upper' not in df_main.columns:
-             return {"count": 0, "results": [], "message": "ไม่พบคอลัมน์ Invoice Number"}
+        search_cols = [c for c in SEARCH_COLUMNS if c in df_main.columns]
+        if not search_cols:
+            return {"count": 0, "results": [], "message": "ไม่พบคอลัมน์สำหรับการค้นหา"}
 
         query = q.strip()
 
         # --- [OPTION 1] ค้นหาด้วย Invoice Number อย่างเดียว (Exact Match) ---
         # result_df = df_main[df_main['Invoice_Number_Upper'] == query.upper()].copy()
 
-        # --- [OPTION 2] Single Search: ค้นหาบางส่วนในทุกคอลัมน์ (Partial Match) ---
-        search_cols = [c for c in TARGET_COLUMNS if c in df_main.columns] + ['Invoice_Number']
+        # --- Global Search: ค้นหาบางส่วนใน 2 คอลัมน์ที่กำหนด ---
         mask = df_main[search_cols].apply(lambda x: x.astype(str).str.contains(query, case=False, na=False)).any(axis=1)
         result_df = df_main[mask].copy()
 
@@ -368,7 +374,7 @@ async def search_vendor(
         # เลือกเฉพาะคอลัมน์ที่สนใจ
         valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
         final_data = result_df[valid_columns].copy()
-        final_data['Invoice_Number'] = result_df['Invoice_Number']
+        final_data['Invoice_Number'] = result_df['Invoice_Number'] if 'Invoice_Number' in result_df.columns else "-"
 
         records = final_data.fillna("-").to_dict(orient='records')
 
@@ -389,19 +395,19 @@ async def search_vendor(
 @app.get("/api/n8n/search")
 async def n8n_search_vendor(
     request: Request,
-    q: str = Query(..., description="Invoice Number"),
+    q: str = Query(..., description="Search query (ชื่อผู้รับเงิน หรือ รายละเอียดของรายการ)"),
     _: bool = Depends(verify_api_key)
 ):
     """
-    ค้นหาข้อมูl Invoice สำหรับ n8n/External API - ต้องมี Bearer Token
+    ค้นหาข้อมูลแบบ Global Search สำหรับ n8n/External API - ต้องมี Bearer Token
     
     Authentication: Bearer Token required
     
     ตัวอย่าง:
-    GET /api/n8n/search?q=INV001234
+    GET /api/n8n/search?q=สมชาย
     Header: Authorization: Bearer <API_KEY>
     """
-    logger.info(f"🔐 Authenticated API request - Invoice: {q}")
+    logger.info(f"🔐 Authenticated API request - Query: {q}")
     try:
         df_main, logs = await fetch_all_excel_data()
         
@@ -412,34 +418,34 @@ async def n8n_search_vendor(
                 "data": None
             }
 
-        if 'Invoice_Number_Upper' not in df_main.columns:
-             return {"success": False, "message": "Data structure error: Missing Invoice column", "data": None}
+        search_cols = [c for c in SEARCH_COLUMNS if c in df_main.columns]
+        if not search_cols:
+            return {"success": False, "message": "Data structure error: Missing search columns", "data": None}
         
         query = q.strip()
 
         # --- [OPTION 1] ค้นหาด้วย Invoice Number อย่างเดียว (Exact Match) ---
         # result_df = df_main[df_main['Invoice_Number_Upper'] == query.upper()].copy()
 
-        # --- [OPTION 2] Single Search: ค้นหาบางส่วนในทุกคอลัมน์ (Partial Match) ---
-        search_cols = [c for c in TARGET_COLUMNS if c in df_main.columns] + ['Invoice_Number']
+        # --- Global Search: ค้นหาบางส่วนใน 2 คอลัมน์ที่กำหนด ---
         mask = df_main[search_cols].apply(lambda x: x.astype(str).str.contains(query, case=False, na=False)).any(axis=1)
         result_df = df_main[mask].copy()
         
         if result_df.empty:
             return {
                 "success": False,
-                "message": f"ไม่พบข้อมูล Invoice: {q}",
+                "message": f"ไม่พบข้อมูลจากคำค้นหา: {q}",
                 "data": None
             }
 
         # เลือกคอลัมน์
         valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
         final_data = result_df[valid_columns].copy()
-        final_data['Invoice_Number'] = result_df['Invoice_Number']
+        final_data['Invoice_Number'] = result_df['Invoice_Number'] if 'Invoice_Number' in result_df.columns else "-"
         
         records = final_data.fillna("-").to_dict(orient='records')
         
-        logger.info(f"✅ n8n query for Invoice {q}: Found {len(records)} record(s)")
+        logger.info(f"✅ n8n query for '{q}': Found {len(records)} record(s)")
         
         return {
             "success": True,
