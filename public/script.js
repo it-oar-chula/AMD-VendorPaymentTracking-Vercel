@@ -102,7 +102,7 @@ async function handleSearch() {
                         <small>เลขบัญชี: <strong>${highlightEsc(item['บัญชีผู้รับเงิน'], input)}</strong></small><br><br>
 
                         <div style="padding: 8px 12px; background: #e8f5e9; border-radius: 6px; border-left: 4px solid #4caf50; display: inline-block;">
-                            <small style="color: #2e7d32; font-weight: bold;">📅 วันที่รายการมีผล: <span style="font-size: 1.1em;">${highlightEsc(item['วันที่รายการมีผล'], input)}</span></small>
+                            <small style="color: #2e7d32; font-weight: bold;">📅 วันที่โอนเงินเข้าบัญชี: <span style="font-size: 1.1em;">${highlightEsc(item['วันที่โอนเงินเข้าบัญชี'], input)}</span></small>
                         </div>
                     </div>
                     <div style="text-align: right;">
