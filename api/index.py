@@ -375,6 +375,9 @@ async def search_vendor(
         valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
         final_data = result_df[valid_columns].copy()
         final_data['Invoice_Number'] = result_df['Invoice_Number'] if 'Invoice_Number' in result_df.columns else "-"
+        
+        # เปลี่ยนชื่อคอลัมน์สำหรับการแสดงผล
+        final_data = final_data.rename(columns={"วันที่รายการมีผล": "วันที่โอนเงินเข้าบัญชี"})
 
         records = final_data.fillna("-").to_dict(orient='records')
 
@@ -442,6 +445,9 @@ async def n8n_search_vendor(
         valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
         final_data = result_df[valid_columns].copy()
         final_data['Invoice_Number'] = result_df['Invoice_Number'] if 'Invoice_Number' in result_df.columns else "-"
+        
+        # เปลี่ยนชื่อคอลัมน์สำหรับการแสดงผล
+        final_data = final_data.rename(columns={"วันที่รายการมีผล": "วันที่โอนเงินเข้าบัญชี"})
         
         records = final_data.fillna("-").to_dict(orient='records')
         
