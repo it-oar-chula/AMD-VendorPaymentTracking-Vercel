@@ -2,7 +2,7 @@
 
 ระบบติดตามสถานะการชำระเงินให้ผู้จำหน่าย สำหรับสำนักงานวิทยทรัพยากร จุฬาลงกรณ์มหาวิทยาลัย
 
-🌐 **Web Interface** | 🔌 **n8m Integration** | ☁️ **Vercel Deployment-Ready**
+🌐 **Web Interface** | 🔌 **n8n Integration** | ☁️ **Vercel Deployment-Ready**
 
 ---
 
@@ -13,7 +13,7 @@
 3. [ติดตั้ง & ตั้งค่า](#-ติดตั้ง--ตั้งค่า)
 4. [รันระบบในท้องถิ่น](#-รันระบบในท้องถิ่น)
 5. [API Endpoints](#-api-endpoints)
-6. [n8m Integration](#-n8m-integration)
+6. [n8n Integration](#-n8n-integration)
 7. [Troubleshooting](#-troubleshooting)
 8. [Deploy to Production](#-deploy-to-production)
 
@@ -24,14 +24,14 @@
 ### โปรเจคนี้ทำอะไร?
 ดึงข้อมูลการชำระเงินจากไฟล์ Excel บน SharePoint และแสดงผลผ่าน:
 - **🌐 Web Interface** - ค้นหาผ่านเว็บเบราว์เซอร์ (http://localhost:3000)
-- **🔌 n8m API** - ให้ External Systems (n8m, Zapier, etc) เรียก API ด้วย Bearer Token Authentication
+- **🔌 n8n API** - ให้ External Systems (n8n, Zapier, etc) เรียก API ด้วย Bearer Token Authentication
 
 ### 📦 โครงสร้างโปรเจค
 
 ```
 .
 ├── api/
-│   └── index.py                    # Backend API (FastAPI) - 2 endpoints: /search, /n8m/search
+│   └── index.py                    # Backend API (FastAPI) - root, health, public search, n8n search
 ├── public/                         # Frontend (HTML/CSS/JS)
 │   ├── index.html
 │   ├── script.js
@@ -46,11 +46,13 @@
 
 ### ✨ Features
 
-- ✅ ค้นหาสถานะการจ่ายเงิน ด้วย Invoice Number
+- ✅ ค้นหาข้อมูลแบบบางส่วนจาก ชื่อผู้รับเงิน และ รายละเอียดของรายการ
+- ✅ รองรับการค้นหาด้วย Invoice Number ได้ในทางปฏิบัติ หากเลขอยู่ในรายละเอียดของรายการ
 - ✅ Web Interface สำหรับ End Users
-- ✅ **n8m/External System Integration** ด้วย Bearer Token Authentication
+- ✅ **n8n/External System Integration** ด้วย Bearer Token Authentication
 - ✅ รองรับไฟล์ Excel (.xlsx, .xls) + CSV
 - ✅ Azure AD Authentication สำหรับ SharePoint
+- ✅ In-memory cache + fail-fast เมื่อ SharePoint/Graph API มีปัญหา
 - ✅ Ready for Vercel Deployment
 
 ---
@@ -103,8 +105,12 @@ SHAREPOINT_SITE_NAME=<ชื่อ SharePoint Site>
 SHAREPOINT_HOST=carchula.sharepoint.com
 SHAREPOINT_FOLDER=<ชื่อ Folder>
 
-# API Authentication (Bearer Token for n8m)
-API_KEY=<Secret Key เดียวกับใน n8m>
+# API Authentication (Bearer Token for n8n)
+API_KEY=<Secret Key เดียวกับใน n8n>
+
+# Optional
+ALLOWED_ORIGINS=http://localhost:3000
+CACHE_TTL_SECONDS=300
 ```
 
 ### 📝 หมายเหตุ:
@@ -151,7 +157,29 @@ Invoke-WebRequest -Uri http://localhost:8000/api/health -UseBasicParsing | Selec
 
 ## 📡 API Endpoints
 
-### 1. Health Check
+### 1. Root
+
+```
+GET /
+```
+
+**Response:**
+```json
+{
+  "status": "online",
+  "service": "Vendor Payment Tracking API",
+  "version": "2.0",
+  "endpoints": [
+    "/api/health",
+    "/api/search",
+    "/api/n8n/search"
+  ]
+}
+```
+
+---
+
+### 2. Health Check
 
 ```
 GET /api/health
@@ -168,7 +196,7 @@ GET /api/health
 
 ---
 
-### 2. Website Search (ไม่ต้อง Authentication)
+### 3. Website Search (ไม่ต้อง Authentication)
 
 ```
 GET /api/search?q=INV001234
@@ -176,34 +204,42 @@ GET /api/search?q=INV001234
 
 **Purpose:** ใช้จาก Frontend Web Interface
 
+**พฤติกรรมจริงของโค้ด:**
+- ค้นหาแบบ partial match
+- ค้นหาเฉพาะคอลัมน์ `ชื่อผู้รับเงิน` และ `รายละเอียดของรายการ`
+- ระบบสร้าง `Invoice_Number` เพิ่มจากคำแรกของ `รายละเอียดของรายการ`
+- public response จะ mask เลขบัญชีธนาคารก่อนส่งกลับ
+
 **Response:**
 ```json
 {
   "count": 1,
   "results": [
     {
-      "วันที่รายการมีผล": "2025-02-01",
+      "วันที่โอนเงินเข้าบัญชี": "2025-02-01",
+      "บัญชีผู้รับเงิน": "xxx-x-xxxxx-9-0",
       "ชื่อผู้รับเงิน": "บจก. ตัวอย่าง",
-      "จำนวนเงิน": "5000",
       "ธนาคาร": "ธนาคารกรุงเทพ",
+      "สาขาธนาคารผู้รับเงิน": "สยาม",
+      "จำนวนเงิน": "5000",
       "รายละเอียดของรายการ": "INV001234 ....",
-      ...
+      "สถานะรายการ": "จ่ายแล้ว",
+      "Invoice_Number": "INV001234"
     }
-  ],
-  "logs": ["✅ สำเร็จ (Excel .xlsx): file.xlsx (100 แถว)"]
+  ]
 }
 ```
 
 ---
 
-### 3. n8m Search (ต้อง Bearer Token)
+### 4. n8n Search (ต้อง Bearer Token)
 
 ```
-GET /api/n8m/search?q=INV001234
+GET /api/n8n/search?q=INV001234
 Authorization: Bearer <API_KEY from .env>
 ```
 
-**Purpose:** ใช้จาก n8m / External Systems
+**Purpose:** ใช้จาก n8n / External Systems
 
 **Response:**
 ```json
@@ -211,14 +247,15 @@ Authorization: Bearer <API_KEY from .env>
   "success": true,
   "count": 1,
   "data": {
-    "วันที่รายการมีผล": "2025-02-01",
+    "วันที่โอนเงินเข้าบัญชี": "2025-02-01",
     "ชื่อผู้รับเงิน": "บจก. ตัวอย่าง",
-    "จำนวนเงิน": "5000",
     "ธนาคาร": "ธนาคารกรุงเทพ",
-    "บัญชีผู้รับเงิน": "123-456-789",
+    "บัญชีผู้รับเงิน": "xxx-xxx-6789",
     "สาขาธนาคารผู้รับเงิน": "สยาม",
+    "จำนวนเงิน": "5000",
     "รายละเอียดของรายการ": "INV001234 ....",
-    "สถานะรายการ": "จ่ายแล้ว"
+    "สถานะรายการ": "จ่ายแล้ว",
+    "Invoice_Number": "INV001234"
   },
   "message": "สำเร็จ - พบข้อมูล 1 รายการ"
 }
@@ -226,24 +263,24 @@ Authorization: Bearer <API_KEY from .env>
 
 ---
 
-## 🔌 n8m Integration
+## 🔌 n8n Integration
 
-### วิธีใช้ใน n8m Workflow
+### วิธีใช้ใน n8n Workflow
 
 #### Step 1: เพิ่ม HTTP Request Node
 
-n8m → Add node → HTTP Request
+n8n → Add node → HTTP Request
 
 #### Step 2: ตั้ง Configuration
 
 | Field | Value |
 |-------|-------|
 | **Method** | GET |
-| **URL** | `{{ $env.VENDOR_TRACKING_URL }}/api/n8m/search?q={{ $node["Previous Node"].json.invoice }}` |
+| **URL** | `{{ $env.VENDOR_TRACKING_URL }}/api/n8n/search?q={{ $node["Previous Node"].json.invoice }}` |
 | **Authentication** | Header |
 | **Header** | `Authorization: Bearer {{ $env.API_KEY }}`<br/>`// ต้องตรงกับค่า API_KEY ใน .env` |
 
-#### Step 3: ตั้ง Environment Variables ใน n8m
+#### Step 3: ตั้ง Environment Variables ใน n8n
 
 ```
 VENDOR_TRACKING_URL = http://localhost:8000 (Local)
@@ -253,7 +290,7 @@ API_KEY = <ค่าจาก .env ของคุณ>
 
 #### Step 4: Test
 
-ส่ง request จาก n8m Workflow ไป Backend
+ส่ง request จาก n8n Workflow ไป Backend
 
 ---
 
@@ -268,13 +305,13 @@ API_KEY = <ค่าจาก .env ของคุณ>
 - Risk: Data Breach !
 
 ✅ มี Bearer Token:
-- เฉพาะ n8m ที่มี API Key ถึงเรียก API ได้
+- เฉพาะ n8n ที่มี API Key ถึงเรียก API ได้
 - ความปลอดภัยสูงขึ้น
 ```
 
 ### วิธี Verify API Key
 
-ทุก request ไปยัง `/api/n8m/*` ต้องส่ง Header:
+ทุก request ไปยัง `/api/n8n/*` ต้องส่ง Header:
 
 ```
 Authorization: Bearer <API_KEY>
@@ -320,7 +357,7 @@ pip install -r requirements.txt
 
 ---
 
-### ❌ "n8m API request returns 401"
+### ❌ "n8n API request returns 401"
 
 ```
 ❌ Problem:
@@ -359,13 +396,15 @@ SHAREPOINT_SITE_NAME = <SharePoint>
 SHAREPOINT_HOST = carchula.sharepoint.com
 SHAREPOINT_FOLDER = <Folder>
 API_KEY = <Change this to something secure!>
+ALLOWED_ORIGINS = https://your-frontend-domain.example
+CACHE_TTL_SECONDS = 300
 ```
 
 4. Deploy
 
-### Step 3: Update n8m
+### Step 3: Update n8n
 
-เปลี่ยน URL ใน n8m:
+เปลี่ยน URL ใน n8n:
 
 ```
 From: http://localhost:8000
@@ -375,7 +414,7 @@ To:   https://vendor-tracking.vercel.app
 ### Step 4: Test Production
 
 ```
-GET https://vendor-tracking.vercel.app/api/n8m/search?q=INV001234
+GET https://vendor-tracking.vercel.app/api/n8n/search?q=INV001234
 Authorization: Bearer <API_KEY>
 ```
 
@@ -385,7 +424,7 @@ Authorization: Bearer <API_KEY>
 
 ### ส่วนข้อมูล (Columns) ที่บันทึก
 
-ระบบเก็บข้อมูล 8 คอลัมน์ต่อไปนี้:
+ระบบเลือกส่งออก 8 คอลัมน์ต่อไปนี้ ถ้ามีอยู่ในไฟล์ต้นทาง:
 
 1. **วันที่รายการมีผล** - วันที่อ้างอิงชำระ
 2. **บัญชีผู้รับเงิน** - เลขบัญชีธนาคาร
@@ -405,8 +444,15 @@ Authorization: Bearer <API_KEY>
 
 ระบบเพียงแต่อ่านไฟล์ที่ขึ้นต้นด้วย `Payment_Detail_Report`
 
+### หมายเหตุจากโค้ดจริง
+
+- Backend ใช้ in-memory cache ตามค่า `CACHE_TTL_SECONDS` โดยค่า default คือ 300 วินาที
+- ถ้า Graph API หรือ SharePoint ตอบกลับลักษณะ throttling/service unavailable ระบบจะเข้าสู่โหมด fail-fast ชั่วคราวประมาณ 5 นาที
+- Backend จะลองอ่านไฟล์เป็น Excel ก่อน และ fallback เป็น CSV ด้วย encoding `utf-8-sig` และ `cp874`
+- Endpoint `/api/search` และ `/api/n8n/search` ใช้ logic ค้นหาเดียวกัน ต่างกันที่ `/api/n8n/search` ต้องมี Bearer token
+
 ---
 
 **Version:** 2.0  
-**Last Updated:** February 23, 2026  
+**Last Updated:** March 18, 2026  
 **Status:** ✅ Production Ready
