@@ -71,11 +71,14 @@ TARGET_COLUMNS = [
     "สถานะรายการ" 
 ]
 
-# คอลัมน์ที่อนุญาตให้ค้นหาแบบ Global Search
-SEARCH_COLUMNS = [
+# ระบบค้นหาเดิม: partial match จากชื่อผู้รับเงิน + รายละเอียดของรายการ
+# ปิดไว้ก่อน แต่ไม่ลบทิ้ง: ตั้ง SEARCH_MODE=partial เมื่อต้องการกลับไปใช้
+SEARCH_MODE = os.getenv("SEARCH_MODE", "strict").strip().lower()
+LEGACY_PARTIAL_SEARCH_COLUMNS = [
     "ชื่อผู้รับเงิน",
     "รายละเอียดของรายการ",
 ]
+STRICT_COMPANY_COLUMN = "ชื่อผู้รับเงิน"
 
 # --- Dependency: Bearer Token Authentication ---
 async def verify_api_key(authorization: Optional[str] = Header(None)) -> bool:
@@ -313,6 +316,43 @@ def mask_account_number(account: str) -> str:
     return ''.join('x' if i in mask_positions else c for i, c in enumerate(acc_str))
 
 
+def legacy_partial_search(df_main: pd.DataFrame, query: str) -> Optional[pd.DataFrame]:
+    """ระบบค้นหาเดิม: ใส่อะไรก็ค้นหาแบบ partial match ได้"""
+    search_cols = [c for c in LEGACY_PARTIAL_SEARCH_COLUMNS if c in df_main.columns]
+    if not search_cols:
+        return None
+    mask = df_main[search_cols].apply(
+        lambda x: x.astype(str).str.contains(query, case=False, na=False, regex=False)
+    ).any(axis=1)
+    return df_main[mask].copy()
+
+
+def strict_invoice_or_company_search(df_main: pd.DataFrame, query: str) -> Optional[pd.DataFrame]:
+    """ระบบค้นหาปัจจุบัน: Invoice_Number หรือชื่อบริษัทต้องตรงทั้งช่องเท่านั้น"""
+    masks = []
+    if "Invoice_Number_Upper" in df_main.columns:
+        masks.append(df_main["Invoice_Number_Upper"].astype(str).str.strip().eq(query.upper()))
+    elif "Invoice_Number" in df_main.columns:
+        masks.append(df_main["Invoice_Number"].astype(str).str.strip().str.upper().eq(query.upper()))
+    if STRICT_COMPANY_COLUMN in df_main.columns:
+        masks.append(df_main[STRICT_COMPANY_COLUMN].astype(str).str.strip().str.casefold().eq(query.casefold()))
+    if not masks:
+        return None
+
+    mask = masks[0]
+    for extra_mask in masks[1:]:
+        mask = mask | extra_mask
+    return df_main[mask].copy()
+
+
+def search_dataframe(df_main: pd.DataFrame, query: str) -> Optional[pd.DataFrame]:
+    if not query:
+        return df_main.iloc[0:0].copy()
+    if SEARCH_MODE == "partial":
+        return legacy_partial_search(df_main, query)
+    return strict_invoice_or_company_search(df_main, query)
+
+
 # --- API Endpoints ---
 
 @app.get("/")
@@ -341,10 +381,10 @@ async def health_check():
 @app.get("/api/search")
 async def search_vendor(
     request: Request,
-    q: str = Query(..., description="คำค้นหา (ชื่อผู้รับเงิน หรือ รายละเอียดของรายการ)")
+    q: str = Query(..., description="เลข Invoice หรือชื่อผู้รับเงินแบบตรงทั้งช่อง")
 ):
     """
-    ค้นหาข้อมูลแบบ Global Search - Frontend Endpoint (Public)
+    ค้นหาข้อมูลแบบ strict match - Frontend Endpoint (Public)
     
     ตัวอย่าง: GET /api/search?q=สมชาย
     """
@@ -355,18 +395,10 @@ async def search_vendor(
         if df_main.empty:
             return {"count": 0, "results": [], "message": "ตารางข้อมูลว่างเปล่า"}
 
-        search_cols = [c for c in SEARCH_COLUMNS if c in df_main.columns]
-        if not search_cols:
-            return {"count": 0, "results": [], "message": "ไม่พบคอลัมน์สำหรับการค้นหา"}
-
         query = q.strip()
-
-        # --- [OPTION 1] ค้นหาด้วย Invoice Number อย่างเดียว (Exact Match) ---
-        # result_df = df_main[df_main['Invoice_Number_Upper'] == query.upper()].copy()
-
-        # --- Global Search: ค้นหาบางส่วนใน 2 คอลัมน์ที่กำหนด ---
-        mask = df_main[search_cols].apply(lambda x: x.astype(str).str.contains(query, case=False, na=False)).any(axis=1)
-        result_df = df_main[mask].copy()
+        result_df = search_dataframe(df_main, query)
+        if result_df is None:
+            return {"count": 0, "results": [], "message": "ไม่พบคอลัมน์สำหรับการค้นหา"}
 
         if result_df.empty:
             return {"count": 0, "results": [], "message": "ไม่พบข้อมูลรายการดังกล่าว"}
@@ -398,11 +430,11 @@ async def search_vendor(
 @app.get("/api/n8n/search")
 async def n8n_search_vendor(
     request: Request,
-    q: str = Query(..., description="Search query (ชื่อผู้รับเงิน หรือ รายละเอียดของรายการ)"),
+    q: str = Query(..., description="Exact Invoice number or exact company name"),
     _: bool = Depends(verify_api_key)
 ):
     """
-    ค้นหาข้อมูลแบบ Global Search สำหรับ n8n/External API - ต้องมี Bearer Token
+    ค้นหาข้อมูลแบบ strict match สำหรับ n8n/External API - ต้องมี Bearer Token
     
     Authentication: Bearer Token required
     
@@ -421,18 +453,10 @@ async def n8n_search_vendor(
                 "data": None
             }
 
-        search_cols = [c for c in SEARCH_COLUMNS if c in df_main.columns]
-        if not search_cols:
-            return {"success": False, "message": "Data structure error: Missing search columns", "data": None}
-        
         query = q.strip()
-
-        # --- [OPTION 1] ค้นหาด้วย Invoice Number อย่างเดียว (Exact Match) ---
-        # result_df = df_main[df_main['Invoice_Number_Upper'] == query.upper()].copy()
-
-        # --- Global Search: ค้นหาบางส่วนใน 2 คอลัมน์ที่กำหนด ---
-        mask = df_main[search_cols].apply(lambda x: x.astype(str).str.contains(query, case=False, na=False)).any(axis=1)
-        result_df = df_main[mask].copy()
+        result_df = search_dataframe(df_main, query)
+        if result_df is None:
+            return {"success": False, "message": "Data structure error: Missing search columns", "data": None}
         
         if result_df.empty:
             return {

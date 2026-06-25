@@ -59,7 +59,7 @@ async function handleSearch() {
                 <article class="result-card" style="border-left-color: #dc3545; text-align: center;">
                     <h5 style="color: #dc3545; margin-bottom: 0.5rem;">❌ ไม่พบข้อมูล</h5>
                     <p style="margin-bottom: 0.5rem;">ไม่พบรายการ "<strong>${esc(input)}</strong>" หรือรายการยังไม่ได้รับอนุมัติ</p>
-                    <small style="color: #888;">โปรดตรวจสอบเลข Invoice อีกครั้ง (ต้องพิมพ์ตรงกับที่ระบุในเอกสารทุกตัวอักษร)</small>
+                    <small style="color: #888;">โปรดตรวจสอบเลข Invoice หรือชื่อผู้รับเงินอีกครั้ง (ต้องตรงกับเอกสาร)</small>
                 </article>`;
             return;
         }
