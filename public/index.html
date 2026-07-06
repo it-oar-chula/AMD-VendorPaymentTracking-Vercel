@@ -42,15 +42,11 @@
         <section class="search-section">
             <h4 style="margin-bottom: 1rem;">🔍 ค้นหาสถานะการจ่ายเงิน</h4>
             <form onsubmit="event.preventDefault(); handleSearch();">
-                <!-- <label for="searchInput">ระบุเลข Invoice</label> -->
-                <!-- <label for="searchInput">คำค้นหา (Keyword)</label> -->
                 <div role="group">
-                    <!-- <input type="search" id="searchInput" placeholder="กรอกข้อมูลเพื่อค้นหา..." required> -->
-                    <input type="search" id="searchInput" placeholder="ระบุเลข Invoice หรือชื่อบริษัทให้ตรงกับเอกสาร..." required>
+                    <input type="search" id="searchInput" placeholder="ระบุเลขประจำตัวผู้เสียภาษี 13 หลัก..." inputmode="numeric" autocomplete="off" required>
                     <button type="submit">ค้นหา</button>
                 </div>
-                <!-- <small style="color: #888;">* ระบุเลข Invoice ที่ต้องการค้นหา (ต้องพิมพ์ให้ตรงกับเอกสารทุกตัวอักษร)</small> -->
-                <small style="color: #888;">* ต้องระบุเลข Invoice หรือชื่อผู้รับเงินให้ตรงกับข้อมูลในเอกสาร</small>
+                <small style="color: #888;">* ใช้ตัวเลข 13 หลักเท่านั้น หากมีช่องว่างระบบจะจัดให้เอง</small>
             </form>
         </section>
 

@@ -46,7 +46,7 @@ SHAREPOINT_FOLDER = os.getenv("SHAREPOINT_FOLDER", "Test Vendor")
 # Vercel reuses warm instances → cache ทำงานได้จริงใน production
 # ตั้งค่า TTL ผ่าน env var CACHE_TTL_SECONDS (default 5 นาที)
 CACHE_TTL = int(os.getenv("CACHE_TTL_SECONDS", "300"))
-_cache: dict = {"df": None, "timestamp": 0.0}
+_cache: dict = {"payment_df": None, "tax_df": None, "timestamp": 0.0}
 
 # --- SharePoint Status Tracking (Fail Fast Strategy) ---
 # ถ้า SharePoint โดนบล็อค → API จะ return 503 ทันที แทนที่จะรอ timeout
@@ -71,14 +71,11 @@ TARGET_COLUMNS = [
     "สถานะรายการ" 
 ]
 
-# ระบบค้นหาเดิม: partial match จากชื่อผู้รับเงิน + รายละเอียดของรายการ
-# ปิดไว้ก่อน แต่ไม่ลบทิ้ง: ตั้ง SEARCH_MODE=partial เมื่อต้องการกลับไปใช้
-SEARCH_MODE = os.getenv("SEARCH_MODE", "strict").strip().lower()
-LEGACY_PARTIAL_SEARCH_COLUMNS = [
-    "ชื่อผู้รับเงิน",
-    "รายละเอียดของรายการ",
-]
-STRICT_COMPANY_COLUMN = "ชื่อผู้รับเงิน"
+PAYMENT_FILE_PREFIX = "payment_detail_report"
+TAX_FILE_PREFIX = "tax-id"
+TAX_ID_COLUMN = "เลขที่ภาษี 3"
+TAX_DOCUMENT_COLUMN = "เลขเอกสาร"
+PAYMENT_REFERENCE_COLUMN = "เลขที่อ้างอิงผู้รับเงิน"
 
 # --- Dependency: Bearer Token Authentication ---
 async def verify_api_key(authorization: Optional[str] = Header(None)) -> bool:
@@ -143,10 +140,13 @@ async def fetch_all_excel_data():
         SHAREPOINT_DOWN = False
     
     # ถ้า cache ยังไม่หมดอายุ ให้ใช้ข้อมูลเดิมทันที
-    if _cache["df"] is not None and (time.time() - _cache["timestamp"]) < CACHE_TTL:
-        logger.info(f"⚡ Cache hit — using cached data ({len(_cache['df'])} rows, TTL {CACHE_TTL}s)")
+    if _cache["payment_df"] is not None and _cache["tax_df"] is not None and (time.time() - _cache["timestamp"]) < CACHE_TTL:
+        logger.info(
+            f"⚡ Cache hit — using cached data "
+            f"({len(_cache['payment_df'])} payment rows, {len(_cache['tax_df'])} tax rows, TTL {CACHE_TTL}s)"
+        )
         SHAREPOINT_DOWN = False  # Reset status on cache hit
-        return _cache["df"], []
+        return _cache["payment_df"], _cache["tax_df"], []
 
     logger.info("🔄 Cache miss — fetching from SharePoint")
     logs = []
@@ -205,13 +205,18 @@ async def fetch_all_excel_data():
                 logs.append("❌ ไม่พบไฟล์ใดๆ ใน Folder SharePoint นี้")
                 raise SharePointConfigError("No files found in SharePoint folder")
 
-            all_dataframes = []
+            payment_dataframes = []
+            tax_dataframes = []
 
             for file_item in files:
                 file_name = file_item.get('name', '')
 
-                # อ่านเฉพาะไฟล์ที่ขึ้นต้นด้วย "Payment_Detail_Report"
-                if not file_name.startswith('Payment_Detail_Report'):
+                file_name_lower = file_name.lower()
+                is_payment_file = file_name_lower.startswith(PAYMENT_FILE_PREFIX)
+                is_tax_file = file_name_lower.startswith(TAX_FILE_PREFIX)
+
+                # อ่านเฉพาะไฟล์ Payment_Detail_Report* และ tax-id*
+                if not is_payment_file and not is_tax_file:
                     continue
 
                 download_url = file_item.get('@microsoft.graph.downloadUrl')
@@ -236,13 +241,16 @@ async def fetch_all_excel_data():
 
                 # Step 2: Parse (blocking CPU/I/O → threadpool)
                 try:
-                    if file_name.endswith('.xlsx'):
+                    if file_name_lower.endswith('.xlsx'):
                         df = await run_in_threadpool(pd.read_excel, file_content, engine='openpyxl', dtype=str)
-                    elif file_name.endswith('.xls'):
+                    elif file_name_lower.endswith('.xls'):
                         df = await run_in_threadpool(pd.read_excel, file_content, engine='xlrd', dtype=str)
                     else:
                         df = await run_in_threadpool(pd.read_excel, file_content, dtype=str)
-                    all_dataframes.append(df)
+                    if is_payment_file:
+                        payment_dataframes.append(df)
+                    else:
+                        tax_dataframes.append(df)
                     logs.append(f"✅ สำเร็จ: {file_name} ({len(df)} แถว)")
                 except Exception:
                     # Excel ล้มเหลว → ลอง CSV encodings (utf-8-sig, cp874)
@@ -250,7 +258,10 @@ async def fetch_all_excel_data():
                         try:
                             file_content.seek(0)
                             df = await run_in_threadpool(pd.read_csv, file_content, dtype=str, encoding=encoding)
-                            all_dataframes.append(df)
+                            if is_payment_file:
+                                payment_dataframes.append(df)
+                            else:
+                                tax_dataframes.append(df)
                             logs.append(f"✅ สำเร็จ (CSV {encoding}): {file_name} ({len(df)} แถว)")
                             break
                         except Exception:
@@ -258,36 +269,49 @@ async def fetch_all_excel_data():
                     else:
                         logs.append(f"❌ ล้มเหลว: {file_name}")
 
-            if not all_dataframes:
-                logs.append("❌ ไม่พบไฟล์ที่สามารถอ่านข้อมูลได้")
-                raise SharePointConfigError("No matching files could be parsed")
+            if not payment_dataframes:
+                logs.append("❌ ไม่พบไฟล์ Payment_Detail_Report ที่สามารถอ่านข้อมูลได้")
+                raise SharePointConfigError("No Payment_Detail_Report files could be parsed")
+            if not tax_dataframes:
+                logs.append("❌ ไม่พบไฟล์ tax-id ที่สามารถอ่านข้อมูลได้")
+                raise SharePointConfigError("No tax-id files could be parsed")
 
             # รวมข้อมูลจากทุกไฟล์ (blocking → threadpool)
-            combined_df = await run_in_threadpool(pd.concat, all_dataframes, ignore_index=True)
+            combined_df = await run_in_threadpool(pd.concat, payment_dataframes, ignore_index=True)
             combined_df.columns = combined_df.columns.astype(str).str.strip()
+            tax_df = await run_in_threadpool(pd.concat, tax_dataframes, ignore_index=True)
+            tax_df.columns = tax_df.columns.astype(str).str.strip()
 
             # --- Data Transformation (ย้ายมาทำตรงนี้ครั้งเดียว) ---
-            if 'รายละเอียดของรายการ' in combined_df.columns:
-                # สร้าง Invoice_Number
-                combined_df['Invoice_Number'] = combined_df['รายละเอียดของรายการ'].astype(str).str.strip().str.split().str[0]
-                # สร้างตัวช่วยค้นหา (Upper Case)
-                combined_df['Invoice_Number_Upper'] = combined_df['Invoice_Number'].str.upper()
+            if PAYMENT_REFERENCE_COLUMN in combined_df.columns:
+                combined_df["Payment_Document_Number"] = (
+                    combined_df[PAYMENT_REFERENCE_COLUMN].astype(str).str.strip().str.split("/").str[-1].str.strip()
+                )
+                combined_df["Payment_Document_Number_Normalized"] = combined_df["Payment_Document_Number"].apply(normalize_identifier)
+
+            if TAX_ID_COLUMN in tax_df.columns:
+                tax_df["Tax_ID_Normalized"] = tax_df[TAX_ID_COLUMN].apply(normalize_identifier)
+            if TAX_DOCUMENT_COLUMN in tax_df.columns:
+                tax_df["Tax_Document_Number"] = tax_df[TAX_DOCUMENT_COLUMN].astype(str).str.strip()
+                tax_df["Tax_Document_Number_Normalized"] = tax_df["Tax_Document_Number"].apply(normalize_identifier)
             
             # ลบข้อมูลซ้ำ (blocking → threadpool)
             before_count = len(combined_df)
             combined_df = await run_in_threadpool(combined_df.drop_duplicates)
+            tax_df = await run_in_threadpool(tax_df.drop_duplicates)
             after_count = len(combined_df)
             
             if before_count > after_count:
                 logs.append(f"ℹ️ ลบข้อมูลซ้ำ: {before_count - after_count} รายการ")
 
             # ✅ สำเร็จ → บันทึกลง cache + reset status
-            _cache["df"] = combined_df
+            _cache["payment_df"] = combined_df
+            _cache["tax_df"] = tax_df
             _cache["timestamp"] = time.time()
             SHAREPOINT_DOWN = False  # ✅ Reset status on success
-            logger.info(f"✅ Cache updated — {len(combined_df)} rows, TTL {CACHE_TTL}s")
+            logger.info(f"✅ Cache updated — {len(combined_df)} payment rows, {len(tax_df)} tax rows, TTL {CACHE_TTL}s")
 
-            return combined_df, logs
+            return combined_df, tax_df, logs
     
     except SharePointConfigError:
         raise  # Config errors ไม่ใช่ SharePoint ล่ม — ไม่ตั้ง SHAREPOINT_DOWN
@@ -316,41 +340,78 @@ def mask_account_number(account: str) -> str:
     return ''.join('x' if i in mask_positions else c for i, c in enumerate(acc_str))
 
 
-def legacy_partial_search(df_main: pd.DataFrame, query: str) -> Optional[pd.DataFrame]:
-    """ระบบค้นหาเดิม: ใส่อะไรก็ค้นหาแบบ partial match ได้"""
-    search_cols = [c for c in LEGACY_PARTIAL_SEARCH_COLUMNS if c in df_main.columns]
-    if not search_cols:
+def normalize_identifier(value: object) -> str:
+    """เก็บเฉพาะตัวเลข สำหรับเทียบ tax id/document id ที่อาจมี space หรือ hyphen"""
+    return "".join(c for c in str(value).strip() if c.isdigit())
+
+
+def clean_tax_id_input(value: object) -> str:
+    """ลบเฉพาะ whitespace จาก input ผู้ใช้ แต่ไม่ลบขีด/ตัวอักษรเพื่อให้ validate ได้ตรงไปตรงมา"""
+    return "".join(c for c in str(value).strip() if not c.isspace())
+
+
+def validate_tax_id_query(value: object) -> tuple[Optional[str], Optional[str]]:
+    tax_id = clean_tax_id_input(value)
+    if not tax_id:
+        return None, "กรุณาระบุเลขประจำตัวผู้เสียภาษี 13 หลัก"
+    if not tax_id.isdigit():
+        return None, "เลขประจำตัวผู้เสียภาษีต้องเป็นตัวเลข 13 หลักเท่านั้น"
+    if len(tax_id) < 13:
+        return None, f"เลขประจำตัวผู้เสียภาษียังไม่ครบ ต้องมี 13 หลัก ตอนนี้มี {len(tax_id)} หลัก"
+    if len(tax_id) > 13:
+        return None, f"เลขประจำตัวผู้เสียภาษีเกิน ต้องมี 13 หลัก ตอนนี้มี {len(tax_id)} หลัก"
+    return tax_id, None
+
+
+def tax_id_payment_search(payment_df: pd.DataFrame, tax_df: pd.DataFrame, query: str) -> Optional[pd.DataFrame]:
+    """ค้นหาด้วยเลขประจำตัวผู้เสียภาษี แล้ว map เลขเอกสารไปหา payment row"""
+    required_payment_cols = {"Payment_Document_Number_Normalized"}
+    required_tax_cols = {"Tax_ID_Normalized", "Tax_Document_Number_Normalized", TAX_ID_COLUMN, TAX_DOCUMENT_COLUMN}
+    if not required_payment_cols.issubset(payment_df.columns) or not required_tax_cols.issubset(tax_df.columns):
         return None
-    mask = df_main[search_cols].apply(
-        lambda x: x.astype(str).str.contains(query, case=False, na=False, regex=False)
-    ).any(axis=1)
-    return df_main[mask].copy()
+
+    query_tax_id = clean_tax_id_input(query)
+    if not query_tax_id:
+        return payment_df.iloc[0:0].copy()
+
+    matched_tax = tax_df[tax_df["Tax_ID_Normalized"].eq(query_tax_id)].copy()
+    if matched_tax.empty:
+        return payment_df.iloc[0:0].copy()
+
+    document_numbers = set(matched_tax["Tax_Document_Number_Normalized"].dropna())
+    result_df = payment_df[payment_df["Payment_Document_Number_Normalized"].isin(document_numbers)].copy()
+    if result_df.empty:
+        return result_df
+
+    tax_lookup = matched_tax.drop_duplicates("Tax_Document_Number_Normalized")[
+        ["Tax_Document_Number_Normalized", TAX_ID_COLUMN, TAX_DOCUMENT_COLUMN]
+    ]
+    return result_df.merge(
+        tax_lookup,
+        left_on="Payment_Document_Number_Normalized",
+        right_on="Tax_Document_Number_Normalized",
+        how="left",
+    )
 
 
-def strict_invoice_or_company_search(df_main: pd.DataFrame, query: str) -> Optional[pd.DataFrame]:
-    """ระบบค้นหาปัจจุบัน: Invoice_Number หรือชื่อบริษัทต้องตรงทั้งช่องเท่านั้น"""
-    masks = []
-    if "Invoice_Number_Upper" in df_main.columns:
-        masks.append(df_main["Invoice_Number_Upper"].astype(str).str.strip().eq(query.upper()))
-    elif "Invoice_Number" in df_main.columns:
-        masks.append(df_main["Invoice_Number"].astype(str).str.strip().str.upper().eq(query.upper()))
-    if STRICT_COMPANY_COLUMN in df_main.columns:
-        masks.append(df_main[STRICT_COMPANY_COLUMN].astype(str).str.strip().str.casefold().eq(query.casefold()))
-    if not masks:
-        return None
+def payment_records(result_df: pd.DataFrame, query: str) -> list[dict]:
+    valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
+    final_data = result_df[valid_columns].copy()
+    final_data["เลขประจำตัวผู้เสียภาษี"] = result_df[TAX_ID_COLUMN] if TAX_ID_COLUMN in result_df.columns else normalize_identifier(query)
+    final_data["เลขเอกสาร"] = (
+        result_df["Tax_Document_Number_Normalized"]
+        if "Tax_Document_Number_Normalized" in result_df.columns
+        else "-"
+    )
 
-    mask = masks[0]
-    for extra_mask in masks[1:]:
-        mask = mask | extra_mask
-    return df_main[mask].copy()
+    # เปลี่ยนชื่อคอลัมน์สำหรับการแสดงผล
+    final_data = final_data.rename(columns={"วันที่รายการมีผล": "วันที่โอนเงินเข้าบัญชี"})
 
-
-def search_dataframe(df_main: pd.DataFrame, query: str) -> Optional[pd.DataFrame]:
-    if not query:
-        return df_main.iloc[0:0].copy()
-    if SEARCH_MODE == "partial":
-        return legacy_partial_search(df_main, query)
-    return strict_invoice_or_company_search(df_main, query)
+    records = final_data.fillna("-").to_dict(orient="records")
+    for record in records:
+        if "บัญชีผู้รับเงิน" in record:
+            record["บัญชีผู้รับเงิน"] = mask_account_number(str(record["บัญชีผู้รับเงิน"]))
+    return records
 
 
 # --- API Endpoints ---
@@ -381,48 +442,39 @@ async def health_check():
 @app.get("/api/search")
 async def search_vendor(
     request: Request,
-    q: str = Query(..., description="เลข Invoice หรือชื่อผู้รับเงินแบบตรงทั้งช่อง")
+    q: str = Query(..., description="เลขประจำตัวผู้เสียภาษี")
 ):
     """
-    ค้นหาข้อมูลแบบ strict match - Frontend Endpoint (Public)
+    ค้นหาข้อมูลด้วยเลขประจำตัวผู้เสียภาษี - Frontend Endpoint (Public)
     
-    ตัวอย่าง: GET /api/search?q=สมชาย
+    ตัวอย่าง: GET /api/search?q=3100200097940
     """
     logger.info(f"🔍 Public search request - Query: {q}")
     try:
-        df_main, _ = await fetch_all_excel_data()
+        query, validation_error = validate_tax_id_query(q)
+        if validation_error:
+            raise HTTPException(status_code=400, detail=validation_error)
+
+        payment_df, tax_df, _ = await fetch_all_excel_data()
         
-        if df_main.empty:
+        if payment_df.empty or tax_df.empty:
             return {"count": 0, "results": [], "message": "ตารางข้อมูลว่างเปล่า"}
 
-        query = q.strip()
-        result_df = search_dataframe(df_main, query)
+        result_df = tax_id_payment_search(payment_df, tax_df, query)
         if result_df is None:
             return {"count": 0, "results": [], "message": "ไม่พบคอลัมน์สำหรับการค้นหา"}
 
         if result_df.empty:
             return {"count": 0, "results": [], "message": "ไม่พบข้อมูลรายการดังกล่าว"}
 
-        # เลือกเฉพาะคอลัมน์ที่สนใจ
-        valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
-        final_data = result_df[valid_columns].copy()
-        final_data['Invoice_Number'] = result_df['Invoice_Number'] if 'Invoice_Number' in result_df.columns else "-"
-        
-        # เปลี่ยนชื่อคอลัมน์สำหรับการแสดงผล
-        final_data = final_data.rename(columns={"วันที่รายการมีผล": "วันที่โอนเงินเข้าบัญชี"})
-
-        records = final_data.fillna("-").to_dict(orient='records')
-
-        # Mask เลขบัญชีก่อน return สู่ public endpoint
-        for record in records:
-            if 'บัญชีผู้รับเงิน' in record:
-                record['บัญชีผู้รับเงิน'] = mask_account_number(str(record['บัญชีผู้รับเงิน']))
-
+        records = payment_records(result_df, query)
         return {"count": len(records), "results": records}
 
     except SharePointConfigError as e:
         logger.error(f"Config error in search: {e}")
         raise HTTPException(status_code=500, detail="Data configuration error")
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Error in search: {e}", exc_info=True)
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
@@ -430,31 +482,34 @@ async def search_vendor(
 @app.get("/api/n8n/search")
 async def n8n_search_vendor(
     request: Request,
-    q: str = Query(..., description="Exact Invoice number or exact company name"),
+    q: str = Query(..., description="Tax ID"),
     _: bool = Depends(verify_api_key)
 ):
     """
-    ค้นหาข้อมูลแบบ strict match สำหรับ n8n/External API - ต้องมี Bearer Token
+    ค้นหาข้อมูลด้วยเลขประจำตัวผู้เสียภาษี สำหรับ n8n/External API - ต้องมี Bearer Token
     
     Authentication: Bearer Token required
     
     ตัวอย่าง:
-    GET /api/n8n/search?q=สมชาย
+    GET /api/n8n/search?q=3100200097940
     Header: Authorization: Bearer <API_KEY>
     """
     logger.info(f"🔐 Authenticated API request - Query: {q}")
     try:
-        df_main, logs = await fetch_all_excel_data()
+        query, validation_error = validate_tax_id_query(q)
+        if validation_error:
+            raise HTTPException(status_code=400, detail=validation_error)
+
+        payment_df, tax_df, logs = await fetch_all_excel_data()
         
-        if df_main.empty:
+        if payment_df.empty or tax_df.empty:
             return {
                 "success": False,
                 "message": "ไม่สามารถดึงข้อมูลจาก SharePoint ได้",
                 "data": None
             }
 
-        query = q.strip()
-        result_df = search_dataframe(df_main, query)
+        result_df = tax_id_payment_search(payment_df, tax_df, query)
         if result_df is None:
             return {"success": False, "message": "Data structure error: Missing search columns", "data": None}
         
@@ -465,20 +520,7 @@ async def n8n_search_vendor(
                 "data": None
             }
 
-        # เลือกคอลัมน์
-        valid_columns = [col for col in TARGET_COLUMNS if col in result_df.columns]
-        final_data = result_df[valid_columns].copy()
-        final_data['Invoice_Number'] = result_df['Invoice_Number'] if 'Invoice_Number' in result_df.columns else "-"
-        
-        # เปลี่ยนชื่อคอลัมน์สำหรับการแสดงผล
-        final_data = final_data.rename(columns={"วันที่รายการมีผล": "วันที่โอนเงินเข้าบัญชี"})
-        
-        records = final_data.fillna("-").to_dict(orient='records')
-        
-        # ✅ Mask เลขบัญชี (เหมือน /api/search)
-        for record in records:
-            if 'บัญชีผู้รับเงิน' in record:
-                record['บัญชีผู้รับเงิน'] = mask_account_number(str(record['บัญชีผู้รับเงิน']))        
+        records = payment_records(result_df, query)
         logger.info(f"✅ n8n query for '{q}': Found {len(records)} record(s)")
         
         return {

@@ -31,12 +31,49 @@ function highlightEsc(val, term, fallback = '-') {
     return highlight(escaped, term);
 }
 
+function showMessage(resultArea, title, message, detail = '', color = '#dc3545') {
+    resultArea.innerHTML = `
+        <article class="result-card" style="border-left-color: ${color}; text-align: center;">
+            <h5 style="color: ${color}; margin-bottom: 0.5rem;">${esc(title)}</h5>
+            <p style="margin-bottom: 0.5rem;">${esc(message)}</p>
+            ${detail ? `<small style="color: #888;">${esc(detail)}</small>` : ''}
+        </article>`;
+}
+
+function validateTaxId(rawInput) {
+    const value = rawInput.replace(/\s+/g, '');
+    if (!value) {
+        return { value, message: 'กรุณาระบุเลขประจำตัวผู้เสียภาษี 13 หลัก' };
+    }
+    if (!/^\d+$/.test(value)) {
+        return {
+            value,
+            message: 'เลขประจำตัวผู้เสียภาษีต้องเป็นตัวเลขเท่านั้น',
+            detail: 'ระบบลบช่องว่างให้อัตโนมัติ แต่ไม่รับขีด ตัวอักษร หรือสัญลักษณ์'
+        };
+    }
+    if (value.length < 13) {
+        return { value, message: `เลขยังไม่ครบ ต้องมี 13 หลัก ตอนนี้มี ${value.length} หลัก` };
+    }
+    if (value.length > 13) {
+        return { value, message: `เลขเกิน ต้องมี 13 หลัก ตอนนี้มี ${value.length} หลัก` };
+    }
+    return { value };
+}
+
 async function handleSearch() {
-    const input = document.getElementById('searchInput').value.trim();
+    const searchInput = document.getElementById('searchInput');
+    const validation = validateTaxId(searchInput.value);
+    const input = validation.value;
     const resultArea = document.getElementById('result-area');
     const loading = document.getElementById('loading');
 
-    if (!input) return;
+    searchInput.value = input;
+    if (validation.message) {
+        loading.style.display = 'none';
+        showMessage(resultArea, 'ตรวจสอบเลขผู้เสียภาษี', validation.message, validation.detail || '');
+        return;
+    }
 
     // 1. เคลียร์หน้าจอและแสดง Loading
     resultArea.innerHTML = '';
@@ -47,7 +84,8 @@ async function handleSearch() {
         const response = await fetch(`${API_BASE_URL}/search?q=${encodeURIComponent(input)}`);
 
         if (!response.ok) {
-            throw new Error("ไม่สามารถเชื่อมต่อระบบได้");
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || "ไม่สามารถเชื่อมต่อระบบได้");
         }
 
         const data = await response.json();
@@ -55,12 +93,12 @@ async function handleSearch() {
 
         // 3. กรณีไม่พบข้อมูล
         if (data.count === 0) {
-            resultArea.innerHTML = `
-                <article class="result-card" style="border-left-color: #dc3545; text-align: center;">
-                    <h5 style="color: #dc3545; margin-bottom: 0.5rem;">❌ ไม่พบข้อมูล</h5>
-                    <p style="margin-bottom: 0.5rem;">ไม่พบรายการ "<strong>${esc(input)}</strong>" หรือรายการยังไม่ได้รับอนุมัติ</p>
-                    <small style="color: #888;">โปรดตรวจสอบเลข Invoice หรือชื่อผู้รับเงินอีกครั้ง (ต้องตรงกับเอกสาร)</small>
-                </article>`;
+            showMessage(
+                resultArea,
+                'ไม่พบข้อมูล',
+                `เลขผู้เสียภาษี ${input} ถูกต้องตามรูปแบบแล้ว แต่ไม่พบรายการจ่ายเงิน`,
+                'อาจยังไม่มีข้อมูลในไฟล์ tax-id หรือยังจับคู่เลขเอกสารกับ Payment_Detail_Report ไม่ได้'
+            );
             return;
         }
 
@@ -82,7 +120,8 @@ async function handleSearch() {
             <div class="result-card" style="border-left-color: ${statusClass === 'status-success' ? '#28a745' : '#ffc107'};">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
                     <div>
-                        <small style="color: #888;">Invoice: ${highlightEsc(item['Invoice_Number'], input)}</small>
+                        <small style="color: #888;">เลขผู้เสียภาษี: ${highlightEsc(item['เลขประจำตัวผู้เสียภาษี'], input)}</small><br>
+                        <small style="color: #888;">เลขเอกสาร: ${highlightEsc(item['เลขเอกสาร'], input)}</small>
                         <h5 style="margin: 0; font-weight: bold; color: #333;">${highlightEsc(item['ชื่อผู้รับเงิน'], input, 'ไม่ระบุชื่อ')}</h5>
                     </div>
                     <span class="status-pill ${statusClass}">
